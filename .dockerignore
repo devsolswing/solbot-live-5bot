@@ -1,0 +1,15 @@
+# Never bake secrets, keys, state, or local files into the image.
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+**/*keypair*.json
+**/*secret*
+**/*.pem
+**/*.key
+**/state/**
+*.log
+.DS_Store
