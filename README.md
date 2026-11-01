@@ -10,12 +10,23 @@ launch without breaking the mainnet path. Network is selected by the
 Mainnet is later, only after devnet is proven and James gives a
 separate mainnet go-ahead.
 
+**Currency (James, 2026-10-31): SOL ONLY.** James ordered "scrap the
+USDC, go straight to SOL". That supersedes the earlier "everything in
+USDC / sells park in USDC" rules (see RULES.md §0, history only).
+Bankroll, buys, sells, and parking are all in SOL: buys SOL -> token,
+sells token -> SOL, proceeds park in SOL. No stablecoin is used
+anywhere in this build — no stablecoin mint, conversion, or parking
+remains in the live engine, dry run, or rules.
+
 ## Files
 
 - `engine.py` — core logic: sizing, pipeline, sell rules, halt, live gate,
   key-shape validation (never logs key material). No network, no signing.
-- `dry_run.py` — read-only public checks: SOL price, CAD/USD rate, and a
-  Jupiter swap quote. No signing, no sending, no funding.
+  SOL-only ledger; halt via a live SOL price (fail-closed on a stale
+  or missing SOL price).
+- `dry_run.py` — read-only public checks: wallet SOL balance, SOL price,
+  CAD/USD rate, and halt arithmetic in SOL. No signing, no sending,
+  no funding.
 - `tests/test_engine.py` — unit tests for every rule in RULES.md.
 - `RULES.md` — the rulebook. It wins over older copies on any conflict.
 
@@ -34,6 +45,8 @@ python3 dry_run.py
 
 This only reads public data. If a public endpoint is unreachable from
 this sandbox, the script reports that plainly instead of inventing data.
+If the SOL price is unavailable, the halt arithmetic in SOL is skipped
+(fail-closed) — no SOL amount is invented.
 
 ## How live would be enabled (NOT done by this build)
 
@@ -45,13 +58,14 @@ own separate go-ahead later.
 
 1. **Network** — `NETWORK=devnet` in the deployment environment
    (Railway Variables for the devnet service).
-2. **Funding confirmed on devnet** — faucet funds actually in wallet
-   `9g9R6JvBkvuRAVHVehzoDcokA9R1sxRugiY6G3DkUTFQ` on devnet: devnet
-   SOL for fees (Solana faucet) + devnet USDC (Circle testnet faucet,
-   Solana Devnet). Devnet balance at conversion time: 0 devnet SOL.
+2. **Funding confirmed on devnet** — faucet SOL actually in wallet
+   `9g9R6JvBkvuRAVHVehzoDcokA9R1sxRugiY6G3DkUTFQ` on devnet
+   (Solana faucet only — no other funding token is needed or used).
+   Devnet balance at conversion time: 0 devnet SOL.
    Test bankroll scale (assumption for James to correct, see
-   RULES.md §11): $85 CAD equivalent in devnet USDC, halt at $20 CAD
-   equivalent. These are worthless faucet funds, not real money.
+   RULES.md §11): $85 CAD equivalent in SOL, halt at $20 CAD
+   equivalent, both converted at the live SOL price at funding/test
+   time. These are worthless faucet funds, not real money.
 3. **Key set by James himself** — exactly one of the following, set in
    the deployment environment only (Railway Variables, see below).
    Never in chat, code, repo, or files. Never both at once.
@@ -62,22 +76,22 @@ own separate go-ahead later.
    it matches wallet `9g9R6JvBkvuRAVHVehzoDcokA9R1sxRugiY6G3DkUTFQ`.
 4. **Devnet go-ahead from James** after devnet funding is confirmed.
 5. **Code gate + smoke test** — `LIVE_ENABLED=1` in the devnet service,
-   plus a devnet smoke test in Railway proving a devnet swap route
+   plus a devnet smoke test in Railway proving a devnet SOL swap route
    (routing is UNVERIFIED in this sandbox — see RULES.md §11; fail
    closed if no route) before the first devnet trade.
 
 ### Mainnet later (not authorised by a devnet go-ahead)
 
 1. **Network** — `NETWORK=mainnet` (or unset) in a mainnet service.
-2. **Funding confirmed on mainnet** — $85 CAD worth of mainnet USDC
-   on Solana, plus a little SOL for fees, actually in wallet
-   `9g9R6JvBkvuRAVHVehzoDcokA9R1sxRugiY6G3DkUTFQ`
+2. **Funding confirmed on mainnet** — $85 CAD worth of SOL on Solana,
+   plus enough SOL for fees from the same wallet balance, actually in
+   wallet `9g9R6JvBkvuRAVHVehzoDcokA9R1sxRugiY6G3DkUTFQ`
    (mainnet balance at build time: 0.00158242 SOL, bankroll not funded).
 3. **Key set by James himself** in the mainnet service (§8 of RULES.md).
 4. **Final explicit mainnet go-ahead from James** after mainnet
    funding is confirmed.
 5. **Code gate** — `LIVE_ENABLED=1` in the mainnet service, plus a
-   live-deployment smoke test of a real Jupiter swap execution (which
+   live-deployment smoke test of a real SOL swap execution (which
    this sandbox build explicitly does NOT verify).
 
 Until all gates for a network are done, `LIVE_ENABLED` defaults to off
@@ -86,10 +100,10 @@ this build.
 
 ## Railway deployment (prepared, NOT deployed by this build)
 
-This folder is deployment-ready but **nothing has been pushed, and no
-Railway project or service has been created by this build**. James
-himself performs every step below; the assistant does not set any
-variable and does not ask James for a key.
+This folder is deployment-ready but **no Railway project or service
+has been created by this build**. James himself performs every step
+below; the assistant does not set any variable and does not ask James
+for a key.
 
 ### Files
 
@@ -108,7 +122,8 @@ variable and does not ask James for a key.
 ### Steps James takes (in order)
 
 1. **Push this folder to a GitHub repo** (the assistant has NOT pushed
-   it). Railway deploys from a repo, so the folder must be in one first.
+   it in this conversion task — the parent pushes after review).
+   Railway deploys from a repo, so the folder must be in one first.
 2. **Log in at railway.app**, create a **New Project → Deploy from
    GitHub repo**, and select that repo.
 3. **Service settings:** set the service's **Root Directory** to the
@@ -135,14 +150,15 @@ variable and does not ask James for a key.
    logs show anything else, stop and investigate before proceeding.
 6. **Only after** (i) funding for that network is confirmed landed in
    wallet `9g9R6JvBkvuRAVHVehzoDcokA9R1sxRugiY6G3DkUTFQ` (devnet:
-   faucet SOL + devnet USDC; mainnet: $85 CAD USDC + SOL for fees),
-   (ii) the key variable above is set, and (iii) James gives an
-   explicit go-ahead for that network: set `LIVE_ENABLED=1` in Railway
-   Variables and run a smoke test in Railway (a real swap execution,
-   which this sandbox build explicitly does NOT verify — and on
-   devnet, routing itself is unverified, see RULES.md §11) before the
-   first trade on that network. If Railway asks for payment at any
-   step: **STOP** and do not proceed without James's explicit approval.
+   faucet SOL only; mainnet: $85 CAD equivalent in SOL, fees from the
+   same balance), (ii) the key variable above is set, and (iii) James
+   gives an explicit go-ahead for that network: set `LIVE_ENABLED=1`
+   in Railway Variables and run a smoke test in Railway (a real SOL
+   swap execution, which this sandbox build explicitly does NOT
+   verify — and on devnet, routing itself is unverified, see
+   RULES.md §11) before the first trade on that network. If Railway
+   asks for payment at any step: **STOP** and do not proceed without
+   James's explicit approval.
 
 ### What remains unverified for Railway specifically
 
@@ -152,7 +168,7 @@ variable and does not ask James for a key.
   through unchanged (whitespace trimming is handled by the engine, but
   a mangled paste must be caught by the pubkey-mismatch refusal, not
   by a trade).
-- Live Jupiter swap execution, deployment-environment signer
+- Live SOL swap execution, deployment-environment signer
   construction from `TRADING_PRIVATE_KEY` / `TRADING_KEYPAIR`, and the
   live slow/fast market feed — all still unverified, as in the original
   build. None of these are proven by deploying the disabled image.

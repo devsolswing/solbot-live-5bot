@@ -1,10 +1,22 @@
 # SolBot LIVE 5-bot — Single Rulebook (DISABLED build)
 
-**Status: DISABLED. No real trades, no real key, no mainnet transactions
+**Status: DISABLED. No real trades, no real key, no transactions
 in this build.** This file is the single rulebook for the live build. Where
 any older rulebook, SolBot copy, or Python engine copy conflicts with this
 file, **this file wins for the live build**, because it records James's
 live rules settled on 2026-10-31.
+
+## 0. SUPERSEDED — stablecoin rules removed (James, 2026-10-31)
+
+James ordered, 2026-10-31: **"scrap the USDC, go straight to SOL."**
+That order supersedes every earlier stablecoin rule in this build.
+The previous rules — "everything in USDC", "buys pay USDC", "sells park
+in USDC", the mainnet and devnet stablecoin mints, and stablecoin
+funding/faucet steps — are **removed from the live rules** and must not
+be followed. This paragraph is history only, not a live instruction:
+no stablecoin mint, conversion, or parking remains anywhere in the
+live engine, dry run, or rules below. If any older copy still shows
+stablecoin rules, this file wins.
 
 ## 1. Team, network, wallet (James, 2026-10-31)
 
@@ -28,13 +40,18 @@ live rules settled on 2026-10-31.
   0.00158242 SOL; bankroll **not yet funded** at build time.
 - This build does not hold a key for that wallet (see §6).
 
-## 2. Money (James, 2026-10-31)
+## 2. Money — SOL ONLY (James, 2026-10-31)
 
-- Starting bankroll: **$85 CAD** worth.
-- **Everything in USDC.** Buys pay USDC, sells park in USDC, cash sits in
-  USDC. SOL in the wallet is **only for transaction fees**.
+- Starting bankroll: **$85 CAD equivalent in SOL** (see §7 for how the
+  SOL amount is computed from the live SOL price — no SOL amount is
+  hard-coded as James's number).
+- **Everything in SOL.** Buys are SOL -> token, sells are token -> SOL,
+  cash sits in SOL. **There is no stablecoin anywhere in this build.**
+- Transaction fees are paid in SOL from the same wallet. The deployment
+  must keep enough SOL aside for fees and must not count a fee reserve
+  as trading cash, or buys could fail for lack of fee SOL.
 - Buy size: **exactly 20% of total current bankroll per coin** (total =
-  USDC cash + market value of open positions). Size compounds: a bigger
+  SOL cash + SOL market value of open positions). Size compounds: a bigger
   pot means bigger buys, a smaller pot means smaller buys. This supersedes
   the SolBot Oct 30 chain's 10% buy size.
 - Max **5 open positions**, **one position per coin**.
@@ -61,7 +78,8 @@ live rules settled on 2026-10-31.
   **8% drop from the peak**.
 - **Past +50% peak: sell on a 12% drop from the peak.**
 - **Cap: +1000%.** Sell at +1000% gain regardless of window.
-- **Every sell parks proceeds in USDC.** No conversion back to SOL on exit.
+- **Every sell parks proceeds in SOL.** No conversion to any other
+  currency on exit.
 
 "Slow" vs "fast" is a per-position market-speed input to the sell
 evaluator (see engine.py `market_fast`). The live deployment must feed
@@ -74,6 +92,11 @@ under the hard stop only, and log the missing input).
 
 - **Stale/missing price = no trade.** No buy and no (non-halt) sell on a
   price older than 30 seconds or missing entirely. Never invent a price.
+- **Stale/missing SOL price = trading blocked.** The halt is computed
+  from the SOL portfolio via the live SOL price (§6). If that SOL price
+  is stale (>30s) or missing, the engine raises instead of returning a
+  value — the deployment must treat that as trading blocked, never as
+  "portfolio is above halt".
 - **Spike floor:** a 30-second gain above +500% is treated as bad data
   and blocks the buy (builder default — James has not set a live spike
   number).
@@ -88,30 +111,46 @@ under the hard stop only, and log the missing input).
   existing positions still follow §4.
 - **One position per coin, max 5 open** (§2) is enforced on every buy.
 
-## 6. Halt (James, 2026-10-31)
+## 6. Halt (James, 2026-10-31, adapted to SOL-only)
 
 - **Halt threshold: total portfolio value falls to $20 CAD.**
   Exact $20.00 CAD triggers; above $20.00 CAD does not.
-- Portfolio value for the halt is measured in **CAD**: USD value divided
-  by the USD-per-CAD rate (default 0.712, approximate — see §7).
-- On halt: **sell ALL positions, park everything in USDC, and STOP.**
+- Portfolio value for the halt is measured in **CAD**, computed from
+  the SOL-denominated portfolio: (SOL cash + SOL value of positions) ×
+  live SOL price in USD ÷ USD-per-CAD rate (default 0.712, approximate
+  — see §7). A stale or missing SOL price raises (fail-closed, §5)
+  instead of returning a value.
+- On halt: **sell ALL positions, park everything in SOL, and STOP.**
   No new buys until James explicitly restarts it.
 - Every halt sell is attempted and **retried once** on failure. A failure
   is recorded and reported loudly; the failed position is kept visible
   (not deleted), the portfolio stays halted, and buying stays blocked.
   A single failed sell must never silently allow trading to continue.
+- **Consequence of scrapping the stablecoin, stated plainly:** the
+  portfolio now stays exposed to SOL price moves even between trades.
+  With no stablecoin park, a SOL price drop alone — with no position
+  losing at all — moves the portfolio toward the $20 CAD halt, and a
+  SOL rise alone moves it away. The halt can therefore trip on SOL
+  movement, not only on trading losses. That is the direct consequence
+  of going straight to SOL.
 
 ## 7. CAD conversion (approximate, not exact)
 
 - Starting bankroll $85 CAD and halt $20 CAD are CAD figures; trading
-  itself happens in USDC. Conversion uses a USD-per-CAD rate.
+  itself happens in SOL. Conversion method (no SOL amount is James's
+  number): SOL amount = CAD amount × USD-per-CAD rate ÷ live SOL price
+  in USD. Example at a live rate of 0.7143 USD per CAD: $85 CAD ≈
+  $60.71 USD, and $20 CAD ≈ $14.29 USD; divide each by the live SOL
+  price in USD to get the SOL figures at that moment. Both rates move,
+  so the SOL figures move with them — never present a SOL bankroll or
+  halt figure as fixed.
 - Default rate in code: **0.712 USD per CAD** (the rate used for James's
   earlier CAD paper conversions, 2026-10-28). It is a fallback only.
-- The live deployment must fetch a live rate when available and label
-  the source in its logs. The CAD value of the portfolio — and therefore
-  the exact moment the $20 CAD halt trips — is **approximate**, because
-  the rate moves. Never present a CAD halt figure as exact to the dollar
-  without stating the rate used.
+- The live deployment must fetch a live SOL price and a live CAD rate
+  when available and label the sources in its logs. The CAD value of
+  the portfolio — and therefore the exact moment the $20 CAD halt
+  trips — is **approximate**, because both rates move. Never present a
+  CAD halt figure as exact to the dollar without stating the rates used.
 
 ## 8. Key handling — CRITICAL (never weaken)
 
@@ -152,7 +191,8 @@ under the hard stop only, and log the missing input).
 - Procedural gates (separate from the code gate, all still outstanding
   at build time, per network):
   1. **Funding confirmation** — the bankroll (§2 / §11) actually landed
-     in wallet §1 on that network, plus a little SOL for fees.
+     in wallet §1 on that network, plus enough SOL for fees (same
+     wallet, same currency — see §2).
   2. **Key set by James** in the deployment environment (§8).
   3. **Final explicit go-ahead from James** after funding is confirmed
      — a devnet go-ahead authorises devnet only; mainnet needs its own
@@ -166,10 +206,10 @@ under the hard stop only, and log the missing input).
 - No transaction is sent, signed, or funded by this build, on devnet
   or mainnet.
 - No live swap execution is verified by this build on either network
-  (see README.md: read-only quote/price checks only; swap execution
-  itself is unverified in this sandbox and must be proven in the
-  deployment environment before any go-ahead — and on devnet, even
-  routing is unverified, see §11).
+  (see README.md: read-only price checks only; swap execution itself
+  is unverified in this sandbox and must be proven in the deployment
+  environment before any go-ahead — and on devnet, even routing is
+  unverified, see §11).
 - Paper SolBot records are untouched by this build.
 
 ## 11. DEVNET FIRST (James, 2026-10-31 — supersedes mainnet-first)
@@ -185,55 +225,43 @@ on devnet except where this section says otherwise.
   pick a network.
 - **Cluster / RPC:** Solana devnet, public RPC
   `https://api.devnet.solana.com`.
-- **Devnet USDC mint (VERIFIED, not guessed):**
-  `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`.
-  Source 1: Circle's docs list this as the Solana Devnet USDC address
-  (`solanaDevnet`, domain 5) for the Circle testnet faucet. Source 2: a
-  live devnet RPC `getAccountInfo` check on 2026-10-31 returned an
-  initialised SPL-token mint with 6 decimals for exactly this address.
-  The mainnet USDC mint (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`)
-  is NOT a devnet mint and must never be used on devnet. A conflicting
-  mint sometimes quoted online (`Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr`)
-  is a different devnet token (self-mint-authority), not Circle's
-  devnet USDC, and is NOT used here.
+- **Devnet funding is SOL only (supersedes the old stablecoin faucet
+  step — see §0):** devnet SOL from the Solana faucet
+  (faucet.solana.com, or `solana airdrop` on devnet) to wallet §1.
+  No other funding token is needed or used. Never send real mainnet
+  funds to a devnet address, and never send devnet tokens anywhere
+  expecting real value.
 - **Wallet:** the same public wallet as §1,
   `9g9R6JvBkvuRAVHVehzoDcokA9R1sxRugiY6G3DkUTFQ` — the same keypair
   works on both networks, but devnet balances are separate and
   **worthless**. Devnet balance checked 2026-10-31: 0 devnet SOL in
   that wallet (mainnet 0.00158242 SOL is a different balance).
-- **Devnet funding (James does this himself, no real money):**
-  devnet SOL for fees from the Solana faucet (faucet.solana.com, or
-  `solana airdrop` on devnet), and devnet USDC from Circle's testnet
-  faucet (faucet.circle.com, select Solana Devnet) to wallet §1.
-  Never send real mainnet funds to a devnet address, and never send
-  devnet tokens anywhere expecting real value.
 - **Test bankroll / halt — ASSUMPTION for James to correct, NOT his
-  words:** the same numbers as mainnet, counted in devnet USDC at the
-  USDC peg for rule purposes — start **$85 CAD equivalent**, halt at
-  **$20 CAD equivalent** (sell all, park in devnet USDC, stop until
-  James restarts). Devnet funds are worthless faucet tokens, so these
-  CAD figures are a rule-test scale only, not real money at risk.
+  words:** the same numbers as mainnet, now in SOL — start **$85 CAD
+  equivalent in SOL**, halt at **$20 CAD equivalent**, both converted
+  at the live SOL price at funding/test time by the §7 method (no SOL
+  amount is hard-coded). Devnet funds are worthless faucet tokens, so
+  these CAD figures are a rule-test scale only, not real money at risk.
   If James wants different devnet numbers, he says so and this section
   is corrected — do not silently carry mainnet money figures into a
   devnet test as if they were real.
 - **Devnet DEX routing — UNVERIFIED, fail closed:** in this sandbox a
-  read-only Jupiter v6 quote for devnet USDC → SOL returned no route,
-  and DexScreener returned no pairs for the devnet USDC mint.
+  read-only Jupiter v6 quote returned no route for a devnet swap.
   Jupiter's current Swap/Ultra APIs are mainnet-focused. Before any
-  devnet live test, the deployment MUST prove a devnet route — an
-  Orca/Raydium devnet pool, a direct DEX instruction, or a devnet test
-  token with a real pool — and the engine must trade **only** on a
-  proven route. If no route can be proven, the devnet test stops at
+  devnet live test, the deployment MUST prove a devnet SOL swap route
+  — an Orca/Raydium devnet pool, a direct DEX instruction, or a devnet
+  test token with a real pool — and the engine must trade **only** on
+  a proven route. If no route can be proven, the devnet test stops at
   funding + wallet + halt/sizing verification, and trenches trading on
   devnet must NOT be presented as proven or working.
 - **Devnet go-ahead gates (all outstanding at build time):**
   1. Railway **devnet** service deployed from the repo, with
      `NETWORK=devnet`.
-  2. Faucet funding landed in wallet §1 on devnet (SOL + devnet USDC).
+  2. Faucet SOL funding landed in wallet §1 on devnet.
   3. Key set by James himself in the Railway devnet service (§8) —
      the same keypair, validated against the same pubkey.
   4. **Devnet go-ahead from James** (explicit, after funding is
      confirmed), then `LIVE_ENABLED=1` + a devnet smoke test in
-     Railway before the first devnet trade.
+     Railway proving a SOL swap route before the first devnet trade.
   A devnet go-ahead does NOT authorise mainnet. Mainnet still needs
   its own funding confirmation, key check, and final go-ahead later.

@@ -4,14 +4,24 @@ This module contains the trading logic for the previous 5-bot screening
 team (Screener, Analyzer, Secondary Screening, Executor, Risk Management)
 for Solana, as settled by James on 2026-10-31, with a DEVNET-FIRST launch
 added 2026-10-31 (James reversed his mainnet-straight-away order: devnet
-first, mainnet later after devnet is proven).
+first, mainnet later after devnet is proven), and a SOL-ONLY conversion
+added 2026-10-31 (James's 2026-10-31 SOL-only order).
+
+SOL-ONLY (James, 2026-10-31 — supersedes every earlier other-currency rule
+in this build): bankroll, buys, sells, and parking are ALL in SOL.
+Buys: SOL -> token. Sells: token -> SOL. Cash sits in SOL. There is no
+other-currency mint, conversion, or parking anywhere in this file. Fees are
+paid in SOL from the same wallet, so the deployment must keep enough
+SOL aside for fees and must not count a fee reserve as trading cash
+(see RULES.md).
 
 Network is selected ONLY by the NETWORK environment variable (see
 get_network_config / network_from_env). Unset NETWORK means mainnet,
 exactly as before, so the mainnet code path is unchanged. Devnet mode
-changes ONLY the cluster, RPC URL, and USDC mint; every trading rule
-(sizing, pipeline, sells, halt, fail-closed pricing, key validation,
-live gate) is identical in both modes.
+changes ONLY the cluster and RPC URL; every trading rule (sizing,
+pipeline, sells, halt, fail-closed pricing, key validation, live gate)
+is identical in both modes. Devnet funding is now devnet SOL from the
+Solana faucet only — no devnet other-currency mint is needed or used.
 
 HARD SAFETY RULES (do not weaken these without James's explicit say-so):
   * LIVE is OFF by default. See is_live_enabled().
@@ -28,16 +38,25 @@ HARD SAFETY RULES (do not weaken these without James's explicit say-so):
   * No leverage. No coin over 20% of bankroll. No buy without a full
     pipeline pass. No trade on a stale or missing price (fail-closed).
   * Halt check runs on every step. On halt, ALL positions are sold, the
-    proceeds park in USDC, and buying stops until James restarts it.
+    proceeds park in SOL, and buying stops until James restarts it.
+  * Halt is measured in CAD, computed from the SOL-denominated portfolio
+    using a live SOL price (see total_value_cad). A stale or missing
+    SOL price raises instead of returning a value, so a missing price
+    can never hide a halt — the caller must treat that as trading
+    blocked, not as "above halt".
 
-Currency: positions and cash are tracked in USDC (the trading currency).
-Portfolio value is converted to CAD for the halt check only, using
+Currency: positions and cash are tracked in SOL. Token prices in this
+module are in SOL per token (price_sol). Portfolio value is converted
+to CAD for the halt check only, using a live SOL price in USD and
 USD_PER_CAD (default 0.712, labelled approximate — see RULES.md). The
-halt threshold is $20 CAD against a $85 CAD starting bankroll.
+halt threshold is $20 CAD against a $85 CAD starting bankroll, both
+converted at the live SOL price at funding/test time (no SOL amount is
+hard-coded as James's number — see RULES.md §7 for the conversion
+method).
 
 This file performs NO network access, NO signing, and NO sending. The
-separate dry_run.py script performs read-only public price/quote reads
-only. Nothing in this build starts a persistent loop.
+separate dry_run.py script performs read-only public price reads only.
+Nothing in this build starts a persistent loop.
 """
 
 from __future__ import annotations
@@ -86,36 +105,25 @@ USD_PER_CAD_DEFAULT = 0.712
 
 # ---------------------------------------------------------------------------
 # Network selection (NETWORK env var). Mainnet behaviour is unchanged
-# when NETWORK=mainnet or NETWORK is unset. Devnet changes ONLY cluster,
-# RPC, and USDC mint — never the trading rules.
+# when NETWORK=mainnet or NETWORK is unset. Devnet changes ONLY cluster
+# and RPC — never the trading rules, and no other-currency mint is used on
+# either network (SOL-only since 2026-10-31).
 #
-# Devnet USDC mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU is
-# VERIFIED, not guessed: Circle's docs list it as the Solana Devnet
-# USDC address (solanaDevnet, domain 5), and a live devnet RPC
-# getAccountInfo check on 2026-10-31 returned an initialised SPL-token
-# mint with 6 decimals for exactly that address. The mainnet USDC mint
-# is NOT a devnet mint (devnet getAccountInfo for it returns no mint
-# data), so the two must never be swapped.
-#
-# Devnet swap routing is UNVERIFIED in this sandbox: a read-only
-# Jupiter v6 quote for devnet USDC -> SOL returned no route, and
-# DexScreener returned no pairs for the devnet USDC mint. Jupiter's
-# current Swap/Ultra APIs are mainnet-focused. The deployment MUST
-# prove a devnet route (Orca/Raydium pool, direct DEX instruction, or
-# a devnet test token) before any devnet live test, and must fail
-# closed (no trade) if no route is available. Do not present devnet
-# trenches trading as proven.
+# Swap routing is UNVERIFIED in this sandbox on both networks: a
+# read-only Jupiter v6 quote returned no route for a devnet swap, and
+# Jupiter's current Swap/Ultra APIs are mainnet-focused. The deployment
+# MUST prove a SOL swap route (Orca/Raydium pool, direct DEX
+# instruction, or a devnet test token with a real pool) before any
+# live test, and must fail closed (no trade) if no route is available.
+# Do not present trenches trading as proven on either network.
 # ---------------------------------------------------------------------------
 SOL_MINT = "So11111111111111111111111111111111111111112"
-MAINNET_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 
 
 @dataclass(frozen=True)
 class NetworkConfig:
     name: str  # "mainnet" or "devnet"
     rpc_url: str
-    usdc_mint: str
     sol_mint: str = SOL_MINT
     # False means: no swap route has been verified for this network in
     # this build. The deployment must prove a route before trading.
@@ -127,7 +135,6 @@ NETWORKS = {
     "mainnet": NetworkConfig(
         name="mainnet",
         rpc_url="https://api.mainnet-beta.solana.com",
-        usdc_mint=MAINNET_USDC_MINT,
         swap_route_verified_in_build=False,  # swap execution unverified
         routing_note="Jupiter swap execution unverified in this sandbox; "
         "must be proven in the deployment environment.",
@@ -135,12 +142,10 @@ NETWORKS = {
     "devnet": NetworkConfig(
         name="devnet",
         rpc_url="https://api.devnet.solana.com",
-        usdc_mint=DEVNET_USDC_MINT,
         swap_route_verified_in_build=False,  # see note above: no route found
-        routing_note="DEVNET ROUTING UNVERIFIED: Jupiter v6 quote for "
-        "devnet USDC -> SOL returned no route in this sandbox and "
-        "DexScreener returned no pairs for the devnet USDC mint. "
-        "Deployment must prove a devnet route and fail closed if none.",
+        routing_note="DEVNET ROUTING UNVERIFIED: a Jupiter v6 quote "
+        "returned no route in this sandbox. Deployment must prove a "
+        "devnet SOL swap route and fail closed if none.",
     ),
 }
 
@@ -158,7 +163,7 @@ def parse_network(value) -> str:
     name = str(value).strip().lower()
     if name in NETWORKS:
         return name
-    raise ValueError(f"invalid NETWORK value (expected devnet or mainnet)")
+    raise ValueError("invalid NETWORK value (expected devnet or mainnet)")
 
 
 def get_network_config(value=None) -> NetworkConfig:
@@ -376,61 +381,73 @@ def load_signer(expected_pubkey: str = WALLET_PUBKEY):
 
 
 # ---------------------------------------------------------------------------
-# Portfolio
+# Portfolio — SOL-only ledger. All amounts in SOL unless stated.
 # ---------------------------------------------------------------------------
 @dataclass
 class Position:
     mint: str
-    entry_price_usd: float
-    invested_usd: float
+    entry_price_sol: float   # SOL per token at entry
+    invested_sol: float      # SOL spent on this position
     tokens: float
-    peak_price_usd: float
+    peak_price_sol: float    # SOL per token, highest seen
     entered_at: float = 0.0  # monotonic/step timestamp supplied by caller
 
-    def gain(self, price_usd: float) -> float:
-        if self.entry_price_usd <= 0:
+    def gain(self, price_sol: float) -> float:
+        if self.entry_price_sol <= 0:
             return 0.0
-        return price_usd / self.entry_price_usd - 1.0
+        return price_sol / self.entry_price_sol - 1.0
 
     def peak_gain(self) -> float:
-        if self.entry_price_usd <= 0:
+        if self.entry_price_sol <= 0:
             return 0.0
-        return self.peak_price_usd / self.entry_price_usd - 1.0
+        return self.peak_price_sol / self.entry_price_sol - 1.0
 
-    def value_usd(self, price_usd: float) -> float:
-        return self.tokens * price_usd
+    def value_sol(self, price_sol: float) -> float:
+        return self.tokens * price_sol
 
 
 @dataclass
 class Portfolio:
-    cash_usdc: float
+    cash_sol: float
     positions: dict = field(default_factory=dict)  # mint -> Position
     halted: bool = False
     halt_reason: str = ""
     sell_failures: list = field(default_factory=list)
 
-    def total_value_usd(self, prices_usd: dict) -> float:
-        total = self.cash_usdc
+    def total_value_sol(self, prices_sol: dict) -> float:
+        total = self.cash_sol
         for mint, pos in self.positions.items():
-            price = prices_usd.get(mint)
+            price = prices_sol.get(mint)
             if price is None:
                 # Fail-closed for valuation too: a missing price is valued
                 # at entry (never at an invented price), so a halt cannot
                 # be hidden by a missing feed.
-                price = pos.entry_price_usd
-            total += pos.value_usd(price)
+                price = pos.entry_price_sol
+            total += pos.value_sol(price)
         return total
 
-    def total_value_cad(self, prices_usd: dict,
+    def total_value_cad(self, prices_sol: dict,
+                        sol_price_usd, sol_price_age_seconds,
                         usd_per_cad: float = USD_PER_CAD_DEFAULT) -> float:
+        """Portfolio value in CAD, via the live SOL price.
+
+        Raises ValueError on a stale or missing SOL price — fail-closed,
+        so a missing SOL price can never produce a "portfolio is fine"
+        reading and hide a halt. Callers must treat the raise as
+        trading blocked, not as above-halt. Raises ValueError on a
+        non-positive USD-per-CAD rate.
+        """
+        if not price_is_fresh(sol_price_usd, sol_price_age_seconds):
+            raise ValueError("sol_price_stale_or_missing")
         if usd_per_cad <= 0:
             raise ValueError("usd_per_cad must be positive")
-        return self.total_value_usd(prices_usd) / usd_per_cad
+        sol_total = self.total_value_sol(prices_sol)
+        return sol_total * float(sol_price_usd) / usd_per_cad
 
 
-def buy_size_usd(portfolio_value_usd: float) -> float:
-    """Exactly 20% of total current bankroll, compounding with the pot."""
-    return BUY_PCT_OF_BANKROLL * portfolio_value_usd
+def buy_size_sol(portfolio_value_sol: float) -> float:
+    """Exactly 20% of total current bankroll (in SOL), compounding."""
+    return BUY_PCT_OF_BANKROLL * portfolio_value_sol
 
 
 def should_halt(portfolio_value_cad: float) -> bool:
@@ -441,16 +458,16 @@ def should_halt(portfolio_value_cad: float) -> bool:
 # ---------------------------------------------------------------------------
 # Pricing: fail-closed
 # ---------------------------------------------------------------------------
-def price_is_fresh(price_usd, age_seconds) -> bool:
+def price_is_fresh(price, age_seconds) -> bool:
     """A price is usable only if present, positive, and fresh."""
-    if price_usd is None or age_seconds is None:
+    if price is None or age_seconds is None:
         return False
     try:
-        price = float(price_usd)
+        price_f = float(price)
         age = float(age_seconds)
     except (TypeError, ValueError):
         return False
-    return price > 0 and age <= MAX_PRICE_AGE_SECONDS
+    return price_f > 0 and age <= MAX_PRICE_AGE_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +482,7 @@ class Candidate:
     liquidity_usd: float
     buys: float = 0.0
     sells: float = 0.0
-    price_usd: float = 0.0
+    price_sol: float = 0.0     # SOL per token
     price_age_seconds: float = 0.0
 
 
@@ -473,7 +490,7 @@ def pipeline_pass(candidate: Candidate, crash_watch_active: bool = False) -> boo
     """True only on a full pass. Any failure = no buy, no exception."""
     if crash_watch_active:
         return False
-    if not price_is_fresh(candidate.price_usd, candidate.price_age_seconds):
+    if not price_is_fresh(candidate.price_sol, candidate.price_age_seconds):
         return False
     if candidate.gain_30s < SCREENER_MIN_GAIN_30S:
         return False
@@ -513,31 +530,32 @@ def can_buy(portfolio: Portfolio, candidate: Candidate,
 
 
 def buy(portfolio: Portfolio, candidate: Candidate,
-        portfolio_value_usd: float, live_enabled: bool = False):
+        portfolio_value_sol: float, live_enabled: bool = False):
     """Execute a paper-state buy (no chain interaction in this build).
 
-    Returns the new Position, or None if buying is not allowed. The
-    caller (live deployment) is responsible for the actual swap; this
-    disabled build only models the ledger.
+    SOL -> token. Returns the new Position, or None if buying is not
+    allowed. The caller (live deployment) is responsible for the actual
+    swap; this disabled build only models the ledger.
     """
     if not can_buy(portfolio, candidate, live_enabled=live_enabled):
         return None
-    size = buy_size_usd(portfolio_value_usd)
-    if size <= 0 or size > portfolio.cash_usdc:
+    size = buy_size_sol(portfolio_value_sol)
+    if size <= 0 or size > portfolio.cash_sol:
         return None
-    tokens = size / candidate.price_usd
-    pos = Position(mint=candidate.mint, entry_price_usd=candidate.price_usd,
-                   invested_usd=size, tokens=tokens,
-                   peak_price_usd=candidate.price_usd)
+    tokens = size / candidate.price_sol
+    pos = Position(mint=candidate.mint, entry_price_sol=candidate.price_sol,
+                   invested_sol=size, tokens=tokens,
+                   peak_price_sol=candidate.price_sol)
     portfolio.positions[candidate.mint] = pos
-    portfolio.cash_usdc -= size
+    portfolio.cash_sol -= size
     return pos
 
 
 # ---------------------------------------------------------------------------
-# Sell rules (Risk Management)
+# Sell rules (Risk Management) — sells are token -> SOL, proceeds park
+# in SOL.
 # ---------------------------------------------------------------------------
-def evaluate_sell(position: Position, price_usd: float,
+def evaluate_sell(position: Position, price_sol: float,
                   price_age_seconds, market_fast: bool = False):
     """Return a sell reason string, or None to hold.
 
@@ -551,11 +569,11 @@ def evaluate_sell(position: Position, price_usd: float,
     Stale/missing price -> None (fail-closed: never sell on bad data,
     except the halt path, which uses its own retry/reporting logic).
     """
-    if not price_is_fresh(price_usd, price_age_seconds):
+    if not price_is_fresh(price_sol, price_age_seconds):
         return None
-    if position.peak_price_usd < price_usd:
-        position.peak_price_usd = price_usd
-    gain = position.gain(price_usd)
+    if position.peak_price_sol < price_sol:
+        position.peak_price_sol = price_sol
+    gain = position.gain(price_sol)
     peak_gain = position.peak_gain()
 
     # 1e-9 tolerance so exactly -7% (which is not exactly representable
@@ -565,11 +583,11 @@ def evaluate_sell(position: Position, price_usd: float,
     if gain >= TP_CAP:
         return "take_profit_cap_+1000%"
     if peak_gain > TP_FAST_WINDOW_HIGH:
-        if price_usd <= position.peak_price_usd * (1.0 - TP_ABOVE_50_PEAK_DROP):
+        if price_sol <= position.peak_price_sol * (1.0 - TP_ABOVE_50_PEAK_DROP):
             return "peak_drop_12%_past_+50%"
         return None
     if peak_gain >= TP_FAST_WINDOW_LOW:
-        if price_usd <= position.peak_price_usd * (1.0 - TP_FAST_PEAK_DROP):
+        if price_sol <= position.peak_price_sol * (1.0 - TP_FAST_PEAK_DROP):
             return "peak_drop_8%_in_31-50%_window"
         return None
     if not market_fast and gain >= TP_SLOW_MIN:
@@ -577,11 +595,11 @@ def evaluate_sell(position: Position, price_usd: float,
     return None
 
 
-def sell_all_on_halt(portfolio: Portfolio, prices_usd: dict,
+def sell_all_on_halt(portfolio: Portfolio, prices_sol: dict,
                      price_provider):
-    """Sell ALL positions on halt, park proceeds in USDC, stop buying.
+    """Sell ALL positions on halt, park proceeds in SOL, stop buying.
 
-    price_provider(mint) -> (price_usd, age_seconds); it may raise or
+    price_provider(mint) -> (price_sol, age_seconds); it may raise or
     return a stale price. Each position is attempted, retried once on
     failure, and every failure is recorded in portfolio.sell_failures
     (reported loudly by the caller — never silently ignored). A failed
@@ -598,32 +616,38 @@ def sell_all_on_halt(portfolio: Portfolio, prices_usd: dict,
         last_error = ""
         for attempt in range(2):  # first try + one retry
             try:
-                price_usd, age = price_provider(mint)
+                price_sol, age = price_provider(mint)
             except Exception as exc:  # noqa: BLE001 - must log, not crash
                 last_error = str(exc)
                 continue
-            if not price_is_fresh(price_usd, age):
+            if not price_is_fresh(price_sol, age):
                 last_error = "stale_or_missing_price"
                 continue
-            proceeds = pos.value_usd(float(price_usd))
+            proceeds = pos.value_sol(float(price_sol))
             break
         if proceeds is None:
             failed.append(mint)
             portfolio.sell_failures.append(
                 {"mint": mint, "error": last_error})
             continue
-        portfolio.cash_usdc += proceeds
+        portfolio.cash_sol += proceeds
         del portfolio.positions[mint]
         sold.append(mint)
     return sold, failed
 
 
-def check_halt(portfolio: Portfolio, prices_usd: dict,
+def check_halt(portfolio: Portfolio, prices_sol: dict,
+               sol_price_usd, sol_price_age_seconds,
                usd_per_cad: float = USD_PER_CAD_DEFAULT) -> bool:
-    """Halt check for every step. Returns True if halted (new or existing)."""
+    """Halt check for every step. Returns True if halted (new or existing).
+
+    Raises ValueError if the SOL price is stale or missing — fail-closed:
+    the caller must treat that as trading blocked, never as above-halt.
+    """
     if portfolio.halted:
         return True
-    if should_halt(portfolio.total_value_cad(prices_usd, usd_per_cad)):
+    if should_halt(portfolio.total_value_cad(
+            prices_sol, sol_price_usd, sol_price_age_seconds, usd_per_cad)):
         portfolio.halted = True
         portfolio.halt_reason = "halt_at_$20_CAD"
         return True
