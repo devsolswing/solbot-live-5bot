@@ -2,7 +2,16 @@
 
 This module contains the trading logic for the previous 5-bot screening
 team (Screener, Analyzer, Secondary Screening, Executor, Risk Management)
-for Solana mainnet, as settled by James on 2026-10-31.
+for Solana, as settled by James on 2026-10-31, with a DEVNET-FIRST launch
+added 2026-10-31 (James reversed his mainnet-straight-away order: devnet
+first, mainnet later after devnet is proven).
+
+Network is selected ONLY by the NETWORK environment variable (see
+get_network_config / network_from_env). Unset NETWORK means mainnet,
+exactly as before, so the mainnet code path is unchanged. Devnet mode
+changes ONLY the cluster, RPC URL, and USDC mint; every trading rule
+(sizing, pipeline, sells, halt, fail-closed pricing, key validation,
+live gate) is identical in both modes.
 
 HARD SAFETY RULES (do not weaken these without James's explicit say-so):
   * LIVE is OFF by default. See is_live_enabled().
@@ -73,6 +82,95 @@ SPIKE_MAX_GAIN_30S = 5.00             # >+500% in 30s treated as bad data
 # earlier CAD paper conversions (2026-10-28). It is APPROXIMATE, not a
 # live rate. dry_run.py fetches a live rate when available and labels it.
 USD_PER_CAD_DEFAULT = 0.712
+
+
+# ---------------------------------------------------------------------------
+# Network selection (NETWORK env var). Mainnet behaviour is unchanged
+# when NETWORK=mainnet or NETWORK is unset. Devnet changes ONLY cluster,
+# RPC, and USDC mint — never the trading rules.
+#
+# Devnet USDC mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU is
+# VERIFIED, not guessed: Circle's docs list it as the Solana Devnet
+# USDC address (solanaDevnet, domain 5), and a live devnet RPC
+# getAccountInfo check on 2026-10-31 returned an initialised SPL-token
+# mint with 6 decimals for exactly that address. The mainnet USDC mint
+# is NOT a devnet mint (devnet getAccountInfo for it returns no mint
+# data), so the two must never be swapped.
+#
+# Devnet swap routing is UNVERIFIED in this sandbox: a read-only
+# Jupiter v6 quote for devnet USDC -> SOL returned no route, and
+# DexScreener returned no pairs for the devnet USDC mint. Jupiter's
+# current Swap/Ultra APIs are mainnet-focused. The deployment MUST
+# prove a devnet route (Orca/Raydium pool, direct DEX instruction, or
+# a devnet test token) before any devnet live test, and must fail
+# closed (no trade) if no route is available. Do not present devnet
+# trenches trading as proven.
+# ---------------------------------------------------------------------------
+SOL_MINT = "So11111111111111111111111111111111111111112"
+MAINNET_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+
+
+@dataclass(frozen=True)
+class NetworkConfig:
+    name: str  # "mainnet" or "devnet"
+    rpc_url: str
+    usdc_mint: str
+    sol_mint: str = SOL_MINT
+    # False means: no swap route has been verified for this network in
+    # this build. The deployment must prove a route before trading.
+    swap_route_verified_in_build: bool = True
+    routing_note: str = ""
+
+
+NETWORKS = {
+    "mainnet": NetworkConfig(
+        name="mainnet",
+        rpc_url="https://api.mainnet-beta.solana.com",
+        usdc_mint=MAINNET_USDC_MINT,
+        swap_route_verified_in_build=False,  # swap execution unverified
+        routing_note="Jupiter swap execution unverified in this sandbox; "
+        "must be proven in the deployment environment.",
+    ),
+    "devnet": NetworkConfig(
+        name="devnet",
+        rpc_url="https://api.devnet.solana.com",
+        usdc_mint=DEVNET_USDC_MINT,
+        swap_route_verified_in_build=False,  # see note above: no route found
+        routing_note="DEVNET ROUTING UNVERIFIED: Jupiter v6 quote for "
+        "devnet USDC -> SOL returned no route in this sandbox and "
+        "DexScreener returned no pairs for the devnet USDC mint. "
+        "Deployment must prove a devnet route and fail closed if none.",
+    ),
+}
+
+
+def parse_network(value) -> str:
+    """Parse a NETWORK value. Returns 'devnet' or 'mainnet'.
+
+    Unset/blank means mainnet (the original behaviour). Anything else
+    that is not devnet/mainnet (case-insensitive, whitespace trimmed)
+    raises ValueError so a typo can never silently pick a network —
+    fail closed.
+    """
+    if value is None or str(value).strip() == "":
+        return "mainnet"
+    name = str(value).strip().lower()
+    if name in NETWORKS:
+        return name
+    raise ValueError(f"invalid NETWORK value (expected devnet or mainnet)")
+
+
+def get_network_config(value=None) -> NetworkConfig:
+    """Network config for a NETWORK value (None = env/default mainnet)."""
+    if value is None:
+        value = os.environ.get("NETWORK")
+    return NETWORKS[parse_network(value)]
+
+
+def network_from_env() -> NetworkConfig:
+    """Network config selected by the NETWORK environment variable."""
+    return get_network_config(os.environ.get("NETWORK"))
 
 
 # ---------------------------------------------------------------------------

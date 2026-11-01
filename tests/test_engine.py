@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from engine import (  # noqa: E402
     Candidate, Portfolio, Position, base58_encode, buy, buy_size_usd,
     can_buy, check_halt, crash_watch_active, ed25519_publickey_from_seed,
-    evaluate_sell, is_live_enabled, load_signer,
-    load_signer_with_status, pipeline_pass, price_is_fresh,
+    evaluate_sell, get_network_config, is_live_enabled, load_signer,
+    load_signer_with_status, parse_network, pipeline_pass, price_is_fresh,
     sell_all_on_halt, should_halt,
 )
 
@@ -424,6 +424,80 @@ class TestBase58Key(unittest.TestCase):
             self.assertNotIn(fragment, blob)
             self.assertEqual(stdout.getvalue(), "")
             self.assertEqual(stderr.getvalue(), "")
+
+
+class TestNetwork(unittest.TestCase):
+    """NETWORK selection (devnet-first, mainnet path preserved).
+
+    No network access in these tests; they pin config selection only.
+    """
+
+    def test_unset_defaults_to_mainnet_unchanged(self):
+        old = os.environ.pop("NETWORK", None)
+        try:
+            from engine import network_from_env
+            cfg = network_from_env()
+            self.assertEqual(cfg.name, "mainnet")
+            self.assertEqual(cfg.rpc_url,
+                             "https://api.mainnet-beta.solana.com")
+            self.assertEqual(
+                cfg.usdc_mint,
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        finally:
+            if old is not None:
+                os.environ["NETWORK"] = old
+
+    def test_parse_network_values(self):
+        self.assertEqual(parse_network("devnet"), "devnet")
+        self.assertEqual(parse_network("mainnet"), "mainnet")
+        self.assertEqual(parse_network("  DevNet "), "devnet")
+        self.assertEqual(parse_network(""), "mainnet")
+        self.assertEqual(parse_network(None), "mainnet")
+
+    def test_parse_network_invalid_fails_closed(self):
+        for bad in ("dev", "main", "testnet", "solana", "devnet1"):
+            with self.assertRaises(ValueError, msg=bad):
+                parse_network(bad)
+            with self.assertRaises(ValueError, msg=bad):
+                get_network_config(bad)
+
+    def test_devnet_config(self):
+        cfg = get_network_config("devnet")
+        self.assertEqual(cfg.name, "devnet")
+        self.assertEqual(cfg.rpc_url, "https://api.devnet.solana.com")
+        # Circle Solana Devnet USDC, verified via Circle docs + on-chain
+        # devnet getAccountInfo (6 decimals, initialised).
+        self.assertEqual(
+            cfg.usdc_mint,
+            "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU")
+        self.assertNotEqual(cfg.usdc_mint,
+                            get_network_config("mainnet").usdc_mint)
+        # Routing is NOT verified for either network in this build.
+        self.assertFalse(cfg.swap_route_verified_in_build)
+        self.assertFalse(get_network_config("mainnet").swap_route_verified_in_build)
+        # Same SOL mint on both networks.
+        self.assertEqual(cfg.sol_mint,
+                         get_network_config("mainnet").sol_mint)
+
+    def test_rules_unchanged_under_devnet(self):
+        # Network selection must not change any trading rule: sizing,
+        # pipeline, sells, and halt are network-independent.
+        _ = get_network_config("devnet")  # selection itself is the setup
+        self.assertAlmostEqual(buy_size_usd(60.52), 12.104)
+        self.assertTrue(pipeline_pass(fresh_candidate()))
+        self.assertTrue(should_halt(20.0))
+        self.assertFalse(should_halt(20.01))
+        pf = portfolio_with_cash(60.52)  # ~$85 CAD at 0.712
+        self.assertFalse(check_halt(pf, {}))
+        pos = Position("A", 1.0, 10.0, 10.0, 1.0)
+        self.assertEqual(evaluate_sell(pos, 0.93, 5.0), "hard_stop_-7%")
+        pf2 = portfolio_with_cash(20.0)
+        pf2.positions["A"] = Position("A", 1.0, 10.0, 10.0, 1.0)
+        sold, failed = sell_all_on_halt(
+            pf2, {}, lambda mint: (1.5, 5.0))
+        self.assertEqual(sold, ["A"])
+        self.assertEqual(failed, [])
+        self.assertTrue(pf2.halted)
 
 
 if __name__ == "__main__":

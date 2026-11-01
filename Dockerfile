@@ -22,6 +22,9 @@ COPY tests ./tests
 RUN python3 -m unittest discover -s tests
 
 # Explicitly disabled. No TRADING_PRIVATE_KEY / TRADING_KEYPAIR here.
+# NETWORK is NOT set in this image (unset = mainnet default). A devnet
+# service sets NETWORK=devnet in Railway Variables; a mainnet service
+# sets NETWORK=mainnet or leaves it unset.
 ENV PYTHONUNBUFFERED=1
 ENV LIVE_ENABLED=0
 

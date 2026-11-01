@@ -12,7 +12,15 @@ live rules settled on 2026-10-31.
   Screener → Analyzer → Secondary Screening → Executor → Risk Management.
   The new Phantom 3-bot team is NOT live in this build; it stays paper in
   SolBot.
-- Network: **Solana mainnet**, autonomous (no per-trade approval tap).
+- Network: **DEVNET FIRST (James, 2026-10-31, reversing his earlier
+  mainnet-straight-away order).** Launch on Solana devnet, prove it
+  there, and go to mainnet only after devnet is proven and James gives
+  a separate mainnet go-ahead. See §11 for the devnet section.
+  Network is selected by the `NETWORK` environment variable
+  (`devnet` | `mainnet`; unset = mainnet, the original behaviour).
+  The mainnet code path is unchanged when `NETWORK=mainnet`.
+- Trading is autonomous (no per-trade approval tap) in either network
+  once the live gates in §9 are met for that network.
 - Wallet: **separate wallet only**, pubkey
   `9g9R6JvBkvuRAVHVehzoDcokA9R1sxRugiY6G3DkUTFQ`.
   Never the main Phantom wallet, never game treasury, never launch funds,
@@ -142,20 +150,90 @@ under the hard stop only, and log the missing input).
   trade path to run. **Default is off (absent = off).** Even with a key
   present, `LIVE_ENABLED` off means no trading.
 - Procedural gates (separate from the code gate, all still outstanding
-  at build time):
-  1. **Funding confirmation** — the $85 CAD bankroll (USDC on Solana,
-     plus a little SOL for fees) actually landed in wallet §1.
+  at build time, per network):
+  1. **Funding confirmation** — the bankroll (§2 / §11) actually landed
+     in wallet §1 on that network, plus a little SOL for fees.
   2. **Key set by James** in the deployment environment (§8).
-  3. **Final explicit go-ahead from James** after funding is confirmed.
-- Until all three are done, this build stays disabled. Enabling the code
-  gate alone does **not** authorise a trade.
+  3. **Final explicit go-ahead from James** after funding is confirmed
+     — a devnet go-ahead authorises devnet only; mainnet needs its own
+     separate go-ahead later.
+- Until all three are done for that network, this build stays disabled.
+  Enabling the code gate alone does **not** authorise a trade.
 
 ## 10. What this build does NOT do
 
 - No persistent loop is started by this build.
-- No mainnet transaction is sent, signed, or funded by this build.
-- No live Jupiter swap execution is verified by this build (see
-  README.md: read-only quote/price checks only; swap execution itself
-  is unverified in this sandbox and must be proven in the deployment
-  environment before any go-ahead).
+- No transaction is sent, signed, or funded by this build, on devnet
+  or mainnet.
+- No live swap execution is verified by this build on either network
+  (see README.md: read-only quote/price checks only; swap execution
+  itself is unverified in this sandbox and must be proven in the
+  deployment environment before any go-ahead — and on devnet, even
+  routing is unverified, see §11).
 - Paper SolBot records are untouched by this build.
+
+## 11. DEVNET FIRST (James, 2026-10-31 — supersedes mainnet-first)
+
+James chose: **launch on devnet first, mainnet later after devnet is
+proven.** This section is the devnet rulebook; §§2–8 apply unchanged
+on devnet except where this section says otherwise.
+
+- **Network switch:** `NETWORK=devnet` in the deployment environment
+  (Railway Variables). `NETWORK=mainnet` (or unset) keeps the exact
+  original mainnet behaviour. An invalid `NETWORK` value fails closed
+  (engine refuses to select a network) — a typo must never silently
+  pick a network.
+- **Cluster / RPC:** Solana devnet, public RPC
+  `https://api.devnet.solana.com`.
+- **Devnet USDC mint (VERIFIED, not guessed):**
+  `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`.
+  Source 1: Circle's docs list this as the Solana Devnet USDC address
+  (`solanaDevnet`, domain 5) for the Circle testnet faucet. Source 2: a
+  live devnet RPC `getAccountInfo` check on 2026-10-31 returned an
+  initialised SPL-token mint with 6 decimals for exactly this address.
+  The mainnet USDC mint (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`)
+  is NOT a devnet mint and must never be used on devnet. A conflicting
+  mint sometimes quoted online (`Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr`)
+  is a different devnet token (self-mint-authority), not Circle's
+  devnet USDC, and is NOT used here.
+- **Wallet:** the same public wallet as §1,
+  `9g9R6JvBkvuRAVHVehzoDcokA9R1sxRugiY6G3DkUTFQ` — the same keypair
+  works on both networks, but devnet balances are separate and
+  **worthless**. Devnet balance checked 2026-10-31: 0 devnet SOL in
+  that wallet (mainnet 0.00158242 SOL is a different balance).
+- **Devnet funding (James does this himself, no real money):**
+  devnet SOL for fees from the Solana faucet (faucet.solana.com, or
+  `solana airdrop` on devnet), and devnet USDC from Circle's testnet
+  faucet (faucet.circle.com, select Solana Devnet) to wallet §1.
+  Never send real mainnet funds to a devnet address, and never send
+  devnet tokens anywhere expecting real value.
+- **Test bankroll / halt — ASSUMPTION for James to correct, NOT his
+  words:** the same numbers as mainnet, counted in devnet USDC at the
+  USDC peg for rule purposes — start **$85 CAD equivalent**, halt at
+  **$20 CAD equivalent** (sell all, park in devnet USDC, stop until
+  James restarts). Devnet funds are worthless faucet tokens, so these
+  CAD figures are a rule-test scale only, not real money at risk.
+  If James wants different devnet numbers, he says so and this section
+  is corrected — do not silently carry mainnet money figures into a
+  devnet test as if they were real.
+- **Devnet DEX routing — UNVERIFIED, fail closed:** in this sandbox a
+  read-only Jupiter v6 quote for devnet USDC → SOL returned no route,
+  and DexScreener returned no pairs for the devnet USDC mint.
+  Jupiter's current Swap/Ultra APIs are mainnet-focused. Before any
+  devnet live test, the deployment MUST prove a devnet route — an
+  Orca/Raydium devnet pool, a direct DEX instruction, or a devnet test
+  token with a real pool — and the engine must trade **only** on a
+  proven route. If no route can be proven, the devnet test stops at
+  funding + wallet + halt/sizing verification, and trenches trading on
+  devnet must NOT be presented as proven or working.
+- **Devnet go-ahead gates (all outstanding at build time):**
+  1. Railway **devnet** service deployed from the repo, with
+     `NETWORK=devnet`.
+  2. Faucet funding landed in wallet §1 on devnet (SOL + devnet USDC).
+  3. Key set by James himself in the Railway devnet service (§8) —
+     the same keypair, validated against the same pubkey.
+  4. **Devnet go-ahead from James** (explicit, after funding is
+     confirmed), then `LIVE_ENABLED=1` + a devnet smoke test in
+     Railway before the first devnet trade.
+  A devnet go-ahead does NOT authorise mainnet. Mainnet still needs
+  its own funding confirmation, key check, and final go-ahead later.
