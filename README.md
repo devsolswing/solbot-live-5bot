@@ -45,6 +45,15 @@ remains in the live engine, dry run, or rules.
   deployment-supplied tx_builder as the only place that may
   sign/send. With no tx_builder every swap is refused — never
   faked. This build itself signs/sends nothing.
+- `dashboard.py` — live-only, read-only dashboard (added
+  2026-11-01, code build only). Serves the loop's public
+  snapshot as phone-readable HTML (GET /) plus JSON (GET
+  /snapshot.json): positions, P&L, balance + halt distance,
+  pipeline coins, passed/failed, W/L, gate status, last step
+  time. NO trading buttons, NO enable controls, NO key
+  material — every other path is 404, every non-GET method
+  is 405. It is separate from the SolBot paper app and never
+  touches SolBot paper data. See "Live dashboard" below.
 - `dry_run.py` — read-only public checks: wallet SOL balance, SOL price,
   CAD/USD rate, and halt arithmetic in SOL. No signing, no sending,
   no funding.
@@ -147,6 +156,43 @@ injected it returns no quote and refuses with
 no candidates, trades nothing. This build itself signed/sent
 nothing — tests use mocked providers/RPC and in-memory
 test-only keys only.
+
+## Live dashboard (code build only — NOT deployed, NO trading, NO controls)
+
+```sh
+python3 loop.py --feed --executor jupiter --dashboard   # loop + dashboard thread, port $PORT else $DASHBOARD_PORT else 8000
+python3 dashboard.py                                    # standalone server for a snapshot file the loop writes (DASHBOARD_SNAPSHOT_PATH)
+```
+
+`dashboard.py` is the live-only dashboard James asked for: a
+separate, read-only view of the LIVE engine — **not** the SolBot
+paper app, which it never touches. It shows Positions (open, per
+coin, size/entry/mark/value/unrealised P&L), P&L (realised +
+unrealised, per coin and total, SOL), Balance (SOL cash +
+portfolio total, CAD total and halt distance only on a fresh
+SOL price), Coins in the pipeline (Screener → Analyst →
+Secondary → Executor/Risk, per coin), Passed / Failed (per
+pipeline step, with reasons), W/L (wins/losses, per coin and
+total, from recorded sells), gate status (live on/off, network,
+signer validated or not, feed fresh or stale, route status),
+and last step time. The loop writes a public-only JSON snapshot
+on every step (scrubbed of any key/seed/signature/secret keys);
+stale data (feed >30s, snapshot older than the 30s step
+interval) is marked STALE, and "no data yet" / refusing states
+are shown plainly — never invented positions, prices, or P&L.
+
+Deployment: Dockerfile CMD is unchanged (disabled guard only).
+Recommended: thread inside the loop process (`--dashboard`) on
+the same Railway service, since Railway exposes one port per
+service — the start command becomes `python3 loop.py --feed
+--executor jupiter --dashboard` (plus `--tx-builder solana`
+only after the smoke test passes). Alternative: the loop writes
+a snapshot file when `DASHBOARD_SNAPSHOT_PATH` is set and
+`python3 dashboard.py` serves it. A second Railway service on
+its own is NOT viable — it shares no file or memory with the
+loop service and would show "no data yet" forever unless a
+shared store is added (not built here). There are no trading
+buttons, no enable controls, and no POST endpoints of any kind.
 
 ## Dry run (read-only)
 

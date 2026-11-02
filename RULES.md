@@ -510,3 +510,96 @@ on devnet except where this section says otherwise.
   providers/RPC and in-memory test-only keys only. No
   transaction was signed or sent in this build, on devnet or
   mainnet, and no key value was used, requested, or invented.
+
+## 15. Live dashboard (dashboard.py — added 2026-11-01, code build only)
+
+- **Live ONLY, never SolBot paper.** This dashboard presents
+  the LIVE engine (devnet first, wallet §1, SOL only) and is
+  labelled "LIVE 5-bot engine — LIVE ONLY, NOT SolBot paper"
+  on every snapshot and page. It does NOT touch the SolBot
+  app (artifact `swingbot`) or any SolBot paper data, and it
+  must never be mixed into SolBot's paper view. Paper and
+  live stay separate.
+- **Read-only, no controls.** There are NO trading buttons,
+  NO buy/sell actions, and NO enable/disable controls. The
+  server serves GET / (HTML) and GET /snapshot.json (JSON)
+  only; every other path is 404 and every non-GET method is
+  405. There is no POST /buy, /sell, /trade, or /enable
+  endpoint, and none may be added without James's explicit
+  say-so. The dashboard cannot start, stop, enable, or trade
+  for the engine.
+- **Fields shown (from the live engine's own state):**
+  Positions (open, per coin: invested SOL, tokens, entry,
+  current mark, value, unrealised P&L, gain, peak); P&L
+  (realised + unrealised, per coin and total, SOL); Balance
+  (SOL cash, positions value, portfolio total in SOL and,
+  on a fresh SOL price only, in CAD, plus halt distance to
+  the $20 CAD threshold); Coins in the pipeline (Screener ->
+  Analyst -> Secondary -> Executor/Risk, per coin, with the
+  stage reached); Passed / Failed (per pipeline step, with
+  reasons, including the loop's blocked reasons); W/L (wins
+  / losses, per coin and total, from recorded sells — a sell
+  is a win when proceeds exceed recorded invested SOL, a
+  loss when below, neither when exactly break-even; a sell
+  with no recorded entry invents no P&L); Gate status
+  (live on/off, network, signer validated or not by error
+  code only, feed fresh or stale, route status); Last step
+  time. A sell's realised P&L uses the position's recorded
+  invested SOL at the time the loop records it.
+- **Snapshot (JSON, every loop step):** `dashboard.py`
+  `build_snapshot` produces the snapshot dict, and the loop
+  (`run_loop` with a dashboard state) writes it on every
+  step. It contains ONLY public values. `scrub_public`
+  drops any dict key naming key/seed/signature/secret
+  material at any depth before the snapshot is stored,
+  served, or written to a file. The snapshot file writer
+  uses temp + replace so a reader never sees a half-written
+  snapshot.
+- **Freshness / honesty:** a snapshot older than the loop
+  step interval (30s) or a feed older than 30s is marked
+  STALE, with reasons. A missing mark shows as no mark
+  (value at entry, per the engine's fail-closed rule) and a
+  missing/stale SOL price gives NO CAD total and NO halt
+  distance — never a stale-price CAD total that could hide
+  a halt. Before the first step the snapshot is
+  `engine_state: no_data_yet` with every value plainly empty
+  or None; a refusing loop shows its gate error plainly.
+  Positions, prices, and P&L are never invented.
+- **Deployment options (Dockerfile CMD unchanged — disabled
+  guard only; nothing auto-starts on image build):**
+  A. Thread inside the loop process (recommended): start
+  the loop with `--dashboard`; the server runs in a thread
+  sharing the loop's dashboard state, so the page is always
+  current. Port: $PORT (Railway) else $DASHBOARD_PORT else
+  8000. Railway start command becomes, e.g.,
+  `python3 loop.py --feed --executor jupiter --dashboard`
+  (plus `--tx-builder solana` only after the smoke test
+  passes, §14). Note: Railway exposes ONE port per service,
+  so option A is the way the dashboard is reachable on the
+  same service that runs the loop.
+  B. Separate process, same image/service: the loop writes
+  a snapshot JSON file on every step when
+  DASHBOARD_SNAPSHOT_PATH is set, and
+  `python3 dashboard.py` serves that file. The page shows
+  "no data yet" until the first snapshot lands.
+  C. Second Railway service: NOT viable on its own — a
+  second service shares no file or memory with the loop
+  service, so it would show "no data yet" forever unless a
+  shared store is added (not built here). Do not deploy
+  option C expecting live data.
+- **Remaining deployment steps (none done by this build):**
+  push, Railway deploy, start command (already set to
+  `python3 loop.py --feed --executor jupiter`; add
+  `--dashboard` and, only after the smoke test passes,
+  `--tx-builder solana`), key already deployed by James
+  (pubkey match still unverified until a live-gated run
+  checks it), deployment smoke test proving a devnet SOL
+  swap route (route + pubkey), then `LIVE_ENABLED=1` under
+  James's banked devnet go-ahead. That go-ahead does NOT
+  authorise mainnet, and does NOT bypass the route/feed/
+  smoke-test gates.
+- **This build signs/sends NOTHING and touches no SolBot
+  data.** Tests use in-memory state and a local HTTP server
+  only. No transaction was signed or sent in this build, on
+  devnet or mainnet, and no key value was used, requested,
+  or invented.

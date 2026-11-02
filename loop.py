@@ -464,7 +464,8 @@ def smoke_test(route_checker: RouteChecker = None) -> int:
 def run_loop(interval_seconds: int = STEP_INTERVAL_SECONDS,
               max_steps: int = None,
               feed=None, executor=None, route_checker=None,
-              portfolio=None) -> int:
+              portfolio=None, dashboard_state=None,
+              snapshot_path: str = None) -> int:
     """Run the loop until halt, a gate refusal, or max_steps.
 
     feed, if supplied, must be a callable returning a StepInput for
@@ -499,19 +500,61 @@ def run_loop(interval_seconds: int = STEP_INTERVAL_SECONDS,
         route_checker = UnverifiedRouteChecker()
     if portfolio is None:
         portfolio = Portfolio(cash_sol=0.0)
+    # Dashboard (read-only, RULES §15): seed it with any positions
+    # the loop starts with, then update it after every step. It
+    # never changes a trading decision — it only presents state.
+    if dashboard_state is not None:
+        for mint, pos in portfolio.positions.items():
+            dashboard_state.record_buy(mint, pos.invested_sol)
     step = 0
     while max_steps is None or step < max_steps:
         step += 1
         # A LiveFeed instance supplies its own step_input (with
         # the loop's current open positions, so sells stay
         # priced); a plain callable is called as-is.
+        feed_status = ""
         if hasattr(feed, "step_input"):
-            step_input, _feed_status = feed.step_input(
+            step_input, feed_status = feed.step_input(
                 portfolio_positions=list(portfolio.positions.keys()))
         else:
             step_input = feed()
         result = step_loop(portfolio, step_input, executor, route_checker,
                            live_enabled=True)
+        if dashboard_state is not None:
+            for mint, size in result.buys:
+                dashboard_state.record_buy(mint, size)
+            for mint, _reason, proceeds in result.sells:
+                dashboard_state.record_sell(mint, proceeds)
+            from dashboard import (  # noqa: E402 - read-only snapshot
+                build_snapshot, write_snapshot_file,
+            )
+            route_status = (
+                "route_unverified"
+                if isinstance(route_checker, UnverifiedRouteChecker)
+                else "route_checker_configured"
+            )
+            snapshot = build_snapshot(
+                portfolio, prices_sol=step_input.prices_sol,
+                sol_price_usd=step_input.sol_price_usd,
+                sol_price_age_seconds=step_input.sol_price_age_seconds,
+                usd_per_cad=step_input.usd_per_cad,
+                candidates=step_input.candidates, blocked=result.blocked,
+                buys=result.buys, sells=result.sells,
+                gate_status={"live_enabled": True, "network": net.name,
+                             "signer_validated": True,
+                             "signer_error": "",
+                             "feed_fresh": bool(feed_status == "ok"),
+                             # A configured checker is NOT proof:
+                             # only a passed deployment smoke test
+                             # proves a route (see RULES §14).
+                             "route_status": route_status},
+                feed_status=feed_status, route_status=route_status,
+                last_step_at=time.time(), last_error=result.error,
+                engine_state="halted" if result.halted else "running",
+                dashboard_state=dashboard_state)
+            dashboard_state.record_step(snapshot)
+            if snapshot_path:
+                write_snapshot_file(snapshot, snapshot_path)
         logger.info("step=%d ok=%s buys=%s sells=%s blocked=%s",
                     step, result.ok, result.buys, result.sells,
                     result.blocked)
@@ -549,6 +592,15 @@ def main(argv=None) -> int:
                         "route checker. Without a deployment "
                         "tx_builder it still refuses every swap — "
                         "never faked.")
+    parser.add_argument("--dashboard", action="store_true",
+                        help="Start the read-only live dashboard "
+                        "(dashboard.py) in a thread sharing the "
+                        "loop's state. Port: $PORT else "
+                        "$DASHBOARD_PORT else 8000. No trading "
+                        "buttons, no enable controls, no keys. "
+                        "The loop also writes a snapshot JSON "
+                        "file on every step when "
+                        "DASHBOARD_SNAPSHOT_PATH is set.")
     parser.add_argument("--tx-builder", choices=["none", "solana"],
                         default="none",
                         help="Wire tx_builder.py's real Solana "
@@ -607,11 +659,25 @@ def main(argv=None) -> int:
             executor = SwapExecutor(
                 network=network, tx_builder=tx_builder)
             route_checker = JupiterRouteChecker(network=network)
+    dashboard_state = None
+    if args.dashboard:
+        from dashboard import (  # noqa: E402 - read-only, no trading
+            LiveDashboardState, dashboard_port, serve_snapshot_callable,
+        )
+        dashboard_state = LiveDashboardState()
+        server = serve_snapshot_callable(
+            lambda: dashboard_state.snapshot(), port=dashboard_port())
+        print(f"LIVE dashboard (read-only) on port "
+              f"{server.server_address[1]} — no trading buttons, "
+              "no enable controls, no keys.")
     # Without a feed, run_loop refuses with
     # no_live_feed_configured rather than trading on invented data.
     return run_loop(interval_seconds=args.interval_seconds,
                     max_steps=args.max_steps, feed=feed,
-                    executor=executor, route_checker=route_checker)
+                    executor=executor, route_checker=route_checker,
+                    dashboard_state=dashboard_state,
+                    snapshot_path=os.environ.get(
+                        "DASHBOARD_SNAPSHOT_PATH") or None)
 
 
 if __name__ == "__main__":
