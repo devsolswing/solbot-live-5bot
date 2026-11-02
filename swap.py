@@ -14,6 +14,13 @@ Route source (honest status, 2026-11-01)
   reachability gap, NOT proof the endpoint is down, and NOT a
   verified route. A deployment must fetch a live Jupiter quote
   and prove it before any trade.
+* A real transaction builder now exists in tx_builder.py
+  (pure-Python Ed25519 signing, legacy Solana transaction
+  signing/sending, Jupiter swap-transaction provider, and a
+  DevnetPoolQuoter for injected devnet pool data). It is wired
+  into the loop ONLY with ``--tx-builder solana``; without
+  that flag this executor still refuses every swap, exactly
+  as before.
 * Devnet routing is UNVERIFIED: a Jupiter v6 devnet quote
   returned no route in this sandbox, and Jupiter's current
   APIs are mainnet-focused. On devnet this executor refuses
@@ -100,13 +107,19 @@ class Quote:
     """A route quote: what a swap is expected to produce."""
 
     def __init__(self, input_mint, output_mint, input_amount,
-                 output_amount, source="jupiter_v6", fetched_at=None):
+                 output_amount, source="jupiter_v6", fetched_at=None,
+                 raw=None):
         self.input_mint = input_mint
         self.output_mint = output_mint
         self.input_amount = float(input_amount)
         self.output_amount = float(output_amount)
         self.source = source
         self.fetched_at = fetched_at if fetched_at is not None else time.time()
+        # raw: the full quoteResponse dict, when the quoter has one.
+        # tx_builder.py's Jupiter swap provider needs it to request
+        # an unsigned swap transaction; without it, that provider
+        # refuses rather than reconstructing a quote.
+        self.raw = raw
 
     def age_seconds(self, now=None):
         return (now if now is not None else time.time()) - self.fetched_at
@@ -144,7 +157,8 @@ def default_jupiter_quoter(input_mint, output_mint, input_amount,
         return None
     return Quote(input_mint=input_mint, output_mint=output_mint,
                  input_amount=float(input_amount),
-                 output_amount=out_amount, source="jupiter_v6")
+                 output_amount=out_amount, source="jupiter_v6",
+                 raw=data)
 
 
 class JupiterRouteChecker:

@@ -58,10 +58,24 @@ What this loop is NOT
   signer-gated, slippage-guard executor). It is wired in ONLY
   when a deployment passes an executor (see --executor below).
   With no tx_builder supplied it still refuses every swap
-  (``executor_not_configured`` / ``route_unverified``), and
-  this build itself still performs no chain signing or sending
-  — signing/sending lives only in a deployment-supplied
-  tx_builder, after a fresh quote and a validated signer.
+  (``executor_not_configured`` / ``route_unverified``).
+* Transaction builder: tx_builder.py now exists (pure-Python
+  Ed25519 signing, legacy Solana transaction signing/sending,
+  Jupiter swap-transaction provider, and a DevnetPoolQuoter
+  for explicitly injected devnet pool data). It is wired in
+  ONLY with ``--tx-builder solana`` — without that flag the
+  executor still refuses every swap, even with --executor
+  jupiter. The current Railway start command does NOT include
+  --tx-builder, so the deployed loop still refuses; the flag
+  is added only after a deployment smoke test proves a route
+  (see RULES.md §14). This build itself performs no chain
+  signing or sending — tests use mocked providers/RPC only.
+* Devnet route: still UNVERIFIED (see tx_builder.py's
+  research note: Jupiter empty reply, DexScreener pairs null
+  for the devnet mint, mainnet DEX programs not executable
+  on devnet). On devnet, a deployment may inject verified
+  pool data via DEVNET_POOLS_JSON; with none injected, the
+  devnet quoter returns no quote and swaps refuse.
 
 Smoke-test mode
 ---------------
@@ -535,6 +549,17 @@ def main(argv=None) -> int:
                         "route checker. Without a deployment "
                         "tx_builder it still refuses every swap — "
                         "never faked.")
+    parser.add_argument("--tx-builder", choices=["none", "solana"],
+                        default="none",
+                        help="Wire tx_builder.py's real Solana "
+                        "transaction builder into the executor. "
+                        "Default 'none' refuses every swap. "
+                        "'solana' signs/sends ONLY behind the "
+                        "live, network, signer, quote, and "
+                        "slippage gates, and only on a provider-"
+                        "supplied route — add this flag only "
+                        "after a deployment smoke test proves a "
+                        "route (see RULES.md §14).")
     args = parser.parse_args(argv)
     if args.smoke_test:
         if args.feed:
@@ -549,18 +574,39 @@ def main(argv=None) -> int:
     executor = None
     route_checker = None
     if args.feed:
-        from feed import LiveFeed
-        watch = [m.strip() for m in
-                 os.environ.get("WATCH_MINTS", "").split(",") if m.strip()]
+        from feed import LiveFeed, watch_mints_from_env
         feed = LiveFeed(
             network=parse_network(os.environ.get("NETWORK")),
-            watch_mints=watch)
+            watch_mints=watch_mints_from_env())
     if args.executor == "jupiter":
         from swap import JupiterRouteChecker, SwapExecutor
-        executor = SwapExecutor(
-            network=parse_network(os.environ.get("NETWORK")))
-        route_checker = JupiterRouteChecker(
-            network=parse_network(os.environ.get("NETWORK")))
+        network = parse_network(os.environ.get("NETWORK"))
+        tx_builder = None
+        if args.tx_builder == "solana":
+            from tx_builder import (
+                SolanaTxBuilder, jupiter_swap_tx_provider,
+            )
+            tx_builder = SolanaTxBuilder(
+                network=network,
+                swap_tx_provider=jupiter_swap_tx_provider)
+        if network == "devnet":
+            # Devnet has no verified Jupiter route: route-check
+            # and quote ONLY from explicitly injected devnet
+            # pool data (no data = no quote = route_unverified,
+            # fail closed). Never price a devnet swap from a
+            # mainnet Jupiter quote.
+            from tx_builder import DevnetPoolQuoter, devnet_pools_from_env
+            pools = devnet_pools_from_env()
+            quoter = DevnetPoolQuoter(pools=pools, network="devnet")
+            executor = SwapExecutor(
+                network=network, quoter=quoter.quote_for_executor,
+                tx_builder=tx_builder)
+            route_checker = DevnetPoolQuoter(
+                pools=pools, network="devnet")
+        else:
+            executor = SwapExecutor(
+                network=network, tx_builder=tx_builder)
+            route_checker = JupiterRouteChecker(network=network)
     # Without a feed, run_loop refuses with
     # no_live_feed_configured rather than trading on invented data.
     return run_loop(interval_seconds=args.interval_seconds,

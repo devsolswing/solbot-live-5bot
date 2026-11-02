@@ -109,7 +109,44 @@ guard.
 How it is started later (separate deployment step, NOT done here):
 after push, Railway deploy, key set by James, and a smoke test
 proving a route + pubkey match, set the Railway service's Custom
-Start Command to `python3 loop.py` and `LIVE_ENABLED=1`.
+Start Command to `python3 loop.py --feed --executor jupiter
+--tx-builder solana` and `LIVE_ENABLED=1`. (The start command
+already set in Railway is `python3 loop.py --feed --executor
+jupiter` WITHOUT `--tx-builder` — the flag is added only after
+the smoke test passes, so the deployed loop still refuses.)
+
+## Transaction builder + devnet route (code build only — NOT deployed, NO signing, NO sending)
+
+```sh
+python3 loop.py --feed --executor jupiter --tx-builder solana   # wires tx_builder.py; still refuses without a proven route + validated signer
+```
+
+`tx_builder.py` is the one place that may turn a validated
+signer into a signed Solana transaction: pure-Python Ed25519
+signing, legacy Solana message signing/sending, a Jupiter
+swap-transaction provider, and a DevnetPoolQuoter for
+explicitly injected devnet pool data. Gate order before any
+signing/sending: live, network, signer (pubkey must match
+`9g9R…UTFQ`), fresh quote with matching mints, slippage guard
+(1.0%, BUILDER DEFAULT), provider-supplied unsigned
+transaction whose fee payer is the trading wallet, recent
+blockhash, then send + confirm. Any failure = refusal, no
+signing, no sending. The signing seed is read once from the
+same key variables, validated the same way, used only inside
+the signing call, and dropped immediately — never logged.
+
+Devnet route: RESEARCHED, STILL UNVERIFIED. Jupiter returned
+an empty reply, DexScreener returned no pairs for the devnet
+mint checked, and the mainnet DEX program addresses are not
+executable programs on devnet — so no devnet route is proven
+by this build. On devnet the loop quotes/routes ONLY from
+injected verified pool data (`DEVNET_POOLS_JSON`); with none
+injected it returns no quote and refuses with
+`route_unverified`. WATCH_MINTS (comma-separated, read by
+`feed.watch_mints_from_env()`) is the watchlist; empty =
+no candidates, trades nothing. This build itself signed/sent
+nothing — tests use mocked providers/RPC and in-memory
+test-only keys only.
 
 ## Dry run (read-only)
 

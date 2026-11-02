@@ -490,6 +490,18 @@ class LiveFeed:
         return _feed
 
 
+def watch_mints_from_env():
+    """WATCH_MINTS (comma-separated env var) -> [mint, ...].
+
+    Empty / unset = [] (no candidates, trades nothing — the
+    fail-closed default). Whitespace-only entries are dropped.
+    This is the single place loop.py reads the watchlist from,
+    so the env contract lives here, not scattered in callers.
+    """
+    return [m.strip() for m in
+            os.environ.get("WATCH_MINTS", "").split(",") if m.strip()]
+
+
 def feed_smoke_test(network="mainnet", fetcher=None):
     """Read-only feed check: SOL price, CAD rate, and (mainnet
     only) a SOL-pair fetch. No swap, no signing, no trade.

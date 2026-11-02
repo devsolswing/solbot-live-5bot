@@ -403,3 +403,110 @@ on devnet except where this section says otherwise.
   executor still refuses every swap. The Dockerfile CMD is
   still the disabled guard — feed and executor change nothing
   about the image's default behaviour.
+
+## 14. Transaction builder + devnet route (tx_builder.py — added 2026-11-01, code build only)
+
+- **Transaction builder (tx_builder.py):** the ONE place that
+  may turn a validated signer into a signed Solana transaction.
+  It is wired into the loop ONLY with `--tx-builder solana`;
+  without that flag the executor still refuses every swap,
+  exactly as before, and the Dockerfile CMD is still the
+  disabled guard. The current Railway start command
+  (`python3 loop.py --feed --executor jupiter`) does NOT
+  include `--tx-builder`, so the deployed loop still refuses
+  — the flag is added only after a deployment smoke test
+  proves a route (see below).
+- **Gate order inside the builder, before ANY signing or
+  sending:** (1) `LIVE_ENABLED` exactly `"1"`; (2) `NETWORK`
+  parses to devnet/mainnet; (3) signer validated by
+  `engine.load_signer_with_status` (exactly one key variable,
+  derived pubkey must match wallet §1); (4) quote fresh
+  (age ≤30s, positive output) with input/output mints
+  matching the direction (SOL -> token for buys, token ->
+  SOL for sells); (5) slippage guard (1.0%, BUILDER DEFAULT,
+  §13): the plan's expected output must be ≥ min_output,
+  AND min_output itself must be ≥ quote × (1 − guard) — a
+  caller passing a looser min_output is refused, so the guard
+  cannot be widened by a caller; (6) a swap-transaction
+  provider must supply an unsigned transaction whose message's
+  first account (fee payer) is the trading wallet and whose
+  plan mints match the quote; (7) a recent blockhash is
+  fetched from the network RPC (or taken from the supplied
+  transaction's message), the message is signed, and the
+  signed transaction is sent via RPC and (optionally)
+  confirmed. Any failure at any gate = refusal, no signing,
+  no sending, ledger unchanged.
+- **Key handling in the builder (the only exception to §8's
+  "marker only" design):** `engine.load_signer_with_status`
+  deliberately returns no key bytes, so a builder that signs
+  must read the key itself, once, from the same two
+  environment variables, validate it the same way (derive
+  the public key, compare to wallet §1), use the 32-byte
+  seed only inside the signing call, and drop the reference
+  immediately afterwards. The seed never enters a log, an
+  error string, a return value, or a file. Signing is
+  pure-Python Ed25519 (RFC 8032) and Solana transactions use
+  the legacy message format, stdlib only — no external SDK,
+  no pool SDK, no new dependency.
+- **Jupiter swap provider:** `jupiter_swap_tx_provider` POSTs
+  the quote's full quoteResponse to Jupiter's swap endpoint
+  and returns its unsigned swap transaction. It needs the
+  quote's raw response (swap.py's Quote now carries it); a
+  quote without raw data is refused, never reconstructed.
+  In this sandbox Jupiter returned an empty reply, so the
+  provider fails and the builder refuses — correct,
+  fail-closed behaviour, not a route.
+- **Devnet route — RESEARCHED, STILL UNVERIFIED (read-only
+  checks, 2026-11-01):** Jupiter v6 quote returned an empty
+  reply for both a mainnet and a devnet quote; DexScreener
+  returned pairs = null for the devnet token mint checked
+  (4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU — named
+  here as research evidence only, NOT a trading currency;
+  this build is SOL-only); devnet RPC getAccountInfo showed
+  the Orca Whirlpool program address has NO account on
+  devnet, and the Raydium AMM and Jupiter aggregator program
+  addresses are NOT executable programs on devnet
+  (executable=false, owner = System Program) — so mainnet
+  DEX programs cannot be used as a devnet route at their
+  mainnet addresses; Orca and Raydium pool APIs returned
+  MAINNET pool data (chainId 101), not devnet liquidity.
+  **Conclusion: NO devnet SOL swap route is verified by this
+  build.** A deployment proves one only by supplying
+  verified devnet pool data (below) or a devnet-deployed
+  program's swap transaction — and the smoke test must show
+  it before the first devnet trade. Until then, devnet swaps
+  refuse with `route_unverified`, by design. Do NOT present
+  devnet trenches trading as proven or working.
+- **Devnet pool quoter (DevnetPoolQuoter):** quotes ONLY from
+  explicitly injected, verified devnet pool data — a mint
+  with no entry, a non-positive price, or missing decimals
+  returns NO quote. Mainnet pair data must NEVER be injected
+  here. On devnet, loop.py wires this quoter (via
+  `quote_for_executor`, which converts the loop's token-unit
+  sell amounts to smallest units using the pool's decimals)
+  instead of Jupiter, so route-checking and quoting cannot
+  disagree and a mainnet quote can never price a devnet swap.
+- **WATCH_MINTS (watchlist, already wired, now single-sourced):**
+  `feed.watch_mints_from_env()` is the single place the
+  watchlist is read: comma-separated env var, whitespace-only
+  entries dropped, empty/unset = [] = NO candidates, trades
+  nothing. With no watchlist and no open positions the feed
+  produces NO candidates — that fail-closed default is kept,
+  and NO autonomous trenches discovery was added (none was
+  verified). A deployment supplies candidates by setting
+  `WATCH_MINTS` (and, on devnet, `DEVNET_POOLS_JSON` with
+  verified pool data for those mints).
+- **Remaining deployment steps (none done by this build):**
+  push, Railway deploy, start command (already set to
+  `python3 loop.py --feed --executor jupiter`; add
+  `--tx-builder solana` ONLY after the smoke test passes),
+  key already deployed by James (pubkey match still
+  unverified until a live-gated run checks it), deployment
+  smoke test proving a devnet SOL swap route (route +
+  pubkey), then `LIVE_ENABLED=1` under James's banked devnet
+  go-ahead. That go-ahead does NOT authorise mainnet, and
+  does NOT bypass the route/feed/smoke-test gates.
+- **This build signs/sends NOTHING.** Tests use mocked
+  providers/RPC and in-memory test-only keys only. No
+  transaction was signed or sent in this build, on devnet or
+  mainnet, and no key value was used, requested, or invented.

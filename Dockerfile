@@ -19,7 +19,7 @@ WORKDIR /app
 
 # Stdlib only — no dependencies to install, no network fetch at build
 # time beyond the base image.
-COPY engine.py dry_run.py loop.py feed.py swap.py RULES.md README.md ./
+COPY engine.py dry_run.py loop.py feed.py swap.py tx_builder.py RULES.md README.md ./
 COPY tests ./tests
 
 # Fail the build if any unit test fails.
