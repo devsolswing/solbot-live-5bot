@@ -671,7 +671,10 @@ on devnet except where this section says otherwise.
   value). Tests: 175/175 (was 165/165, +10 Orca tests,
   mocked RPC only). Dockerfile CMD unchanged (disabled
   guard); `orca_devnet.py` is not imported by the loop,
-  so no trading path changed. No key was used, no
+  so no trading path changed. Dockerfile COPY now
+  includes `orca_devnet.py` (required: its tests import
+  it; omitting it made the Railway build fail with a
+  loader error at 166 tests). No key was used, no
   transaction signed or sent, nothing pushed or deployed
   by this build.
 - **Exact next action for James (himself, throwaway
