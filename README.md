@@ -31,6 +31,20 @@ remains in the live engine, dry run, or rules.
   route), sells before buys, halt sells-all + stop, and a
   read-only `--smoke-test` mode. Default swap executor and route
   checker refuse every trade (no proven route in this build).
+- `feed.py` — live price feed (added 2026-11-01, code build
+  only). DexScreener token pairs + CoinGecko SOL-price fallback
+  + exchangerate-api CAD rate; PriceTracker computes 30s gains
+  and 5s confirmation from its own marks, rejects >+500%
+  single-window bad ticks, enforces 30s freshness. On devnet it
+  returns no candidates without injected verified devnet pair
+  data (DexScreener pairs are mainnet pairs — see RULES.md §13).
+- `swap.py` — quote-gated, signer-gated swap executor (added
+  2026-11-01, code build only). Jupiter v6 quote source
+  (unverified in this sandbox), 30s quote freshness, 1.0%
+  slippage guard (BUILDER DEFAULT, not James's number), and a
+  deployment-supplied tx_builder as the only place that may
+  sign/send. With no tx_builder every swap is refused — never
+  faked. This build itself signs/sends nothing.
 - `dry_run.py` — read-only public checks: wallet SOL balance, SOL price,
   CAD/USD rate, and halt arithmetic in SOL. No signing, no sending,
   no funding.
@@ -64,14 +78,33 @@ check. Sells first, then buys at exactly 20% per coin, max 5 open,
 one per coin, proceeds park in SOL. On halt it sells all, parks in
 SOL, and stops — no new buys until James restarts it.
 
-What the loop does NOT supply in this build: a live price feed and
-a real swap executor. Step inputs are caller-supplied; with no feed,
-`loop.py` refuses with `no_live_feed_configured` and trades
-nothing. The default swap executor and route checker refuse every
-trade, because devnet DEX routing was NOT verified in the sandbox
-(Jupiter v6 devnet quote returned no route). A deployment must
-wire a real feed and a proven-route executor into `step_loop()` /
-`run_loop()` — never an invented price or a faked swap.
+What the loop does NOT supply on its own: feed.py and swap.py
+now exist (see "Feed + executor" below), but the loop still
+refuses without them wired in — with no feed, `loop.py`
+refuses with `no_live_feed_configured` and trades nothing;
+with no tx_builder, the swap executor refuses every trade.
+Devnet DEX routing was NOT verified in the sandbox (Jupiter v6
+devnet quote returned no route), so a deployment must still
+prove a devnet route — never an invented price or a faked swap.
+
+## Feed + executor (code build only — NOT started by the image)
+
+```sh
+python3 loop.py --smoke-test --feed   # read-only: feed status + route status, no swap, no signing
+python3 loop.py --feed --executor jupiter   # wires feed.py + swap.py; still refuses without a tx_builder
+```
+
+`feed.py` tracks a watchlist (WATCH_MINTS, comma-separated)
+plus open positions, computes 30s gains / 5s confirmation from
+its own marks, rejects >+500% bad ticks, and enforces 30s
+freshness. On devnet it returns no candidates without injected
+verified devnet pair data. `swap.py` requires a validated
+signer, a fresh (≤30s) quote for the exact direction, and the
+1.0% slippage guard (BUILDER DEFAULT, not James's number)
+before calling a deployment-supplied tx_builder — and with no
+tx_builder it refuses every swap. This build signs/sends
+nothing itself, and the Dockerfile CMD is still the disabled
+guard.
 
 How it is started later (separate deployment step, NOT done here):
 after push, Railway deploy, key set by James, and a smoke test

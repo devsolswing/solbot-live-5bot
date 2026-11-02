@@ -45,18 +45,23 @@ What this loop is NOT
   ``python3 loop.py``
   Setting LIVE_ENABLED=1 alone does NOT start trading until that
   start command is configured AND a swap route is proven.
-* It is NOT a live price feed. Step inputs (candidates, prices,
-  SOL price, market speed) are supplied by the caller through the
-  StepInput dataclass. In this build the default caller supplies
-  NO feed: ``python3 loop.py`` with no feed configured refuses
-  with ``no_live_feed_configured`` and trades nothing. A deployment
-  must wire a real feed into step_loop() (or a subclass) — it
-  must never be wired to an invented price.
-* It is NOT a swap executor. Swap execution is an injected
-  SwapExecutor. The default executor refuses every swap
-  (``route_unverified``). A deployment must supply an executor
-  that performs a real SOL swap on a proven route; this build
-  performs no chain signing or sending itself.
+* Live price feed: feed.py now exists (DexScreener + CoinGecko,
+  with a PriceTracker that computes 30s gains / 5s confirmation
+  from its own marks, bad-tick rejection, and 30s freshness).
+  It is wired in ONLY when a deployment passes a feed (see
+  run_loop / --feed below). With no feed configured,
+  ``python3 loop.py`` still refuses with
+  ``no_live_feed_configured`` and trades nothing — never an
+  invented price. On devnet the feed returns no candidates
+  unless verified devnet pair data is injected (see feed.py).
+* Swap executor: swap.py now exists (Jupiter quote-gated,
+  signer-gated, slippage-guard executor). It is wired in ONLY
+  when a deployment passes an executor (see --executor below).
+  With no tx_builder supplied it still refuses every swap
+  (``executor_not_configured`` / ``route_unverified``), and
+  this build itself still performs no chain signing or sending
+  — signing/sending lives only in a deployment-supplied
+  tx_builder, after a fresh quote and a validated signer.
 
 Smoke-test mode
 ---------------
@@ -483,7 +488,14 @@ def run_loop(interval_seconds: int = STEP_INTERVAL_SECONDS,
     step = 0
     while max_steps is None or step < max_steps:
         step += 1
-        step_input = feed()
+        # A LiveFeed instance supplies its own step_input (with
+        # the loop's current open positions, so sells stay
+        # priced); a plain callable is called as-is.
+        if hasattr(feed, "step_input"):
+            step_input, _feed_status = feed.step_input(
+                portfolio_positions=list(portfolio.positions.keys()))
+        else:
+            step_input = feed()
         result = step_loop(portfolio, step_input, executor, route_checker,
                            live_enabled=True)
         logger.info("step=%d ok=%s buys=%s sells=%s blocked=%s",
@@ -511,13 +523,49 @@ def main(argv=None) -> int:
     parser.add_argument("--max-steps", type=int, default=None,
                         help="Stop after this many steps (deployment "
                         "testing only).")
+    parser.add_argument("--feed", action="store_true",
+                        help="Wire the real feed.py price feed "
+                        "(DexScreener/CoinGecko, watchlist from "
+                        "WATCH_MINTS, comma-separated). Without "
+                        "--feed the loop still refuses with "
+                        "no_live_feed_configured.")
+    parser.add_argument("--executor", choices=["jupiter"],
+                        default=None,
+                        help="Wire the swap.py Jupiter executor / "
+                        "route checker. Without a deployment "
+                        "tx_builder it still refuses every swap — "
+                        "never faked.")
     args = parser.parse_args(argv)
     if args.smoke_test:
+        if args.feed:
+            from feed import feed_smoke_test as _feed_smoke
+            ok, report = _feed_smoke(
+                network=parse_network(os.environ.get("NETWORK")))
+            print(f"Feed smoke test: ok={ok} report={report}")
+            if not ok:
+                return 2
         return smoke_test()
-    # No feed is wired in this build, so run_loop refuses with
+    feed = None
+    executor = None
+    route_checker = None
+    if args.feed:
+        from feed import LiveFeed
+        watch = [m.strip() for m in
+                 os.environ.get("WATCH_MINTS", "").split(",") if m.strip()]
+        feed = LiveFeed(
+            network=parse_network(os.environ.get("NETWORK")),
+            watch_mints=watch)
+    if args.executor == "jupiter":
+        from swap import JupiterRouteChecker, SwapExecutor
+        executor = SwapExecutor(
+            network=parse_network(os.environ.get("NETWORK")))
+        route_checker = JupiterRouteChecker(
+            network=parse_network(os.environ.get("NETWORK")))
+    # Without a feed, run_loop refuses with
     # no_live_feed_configured rather than trading on invented data.
     return run_loop(interval_seconds=args.interval_seconds,
-                    max_steps=args.max_steps, feed=None)
+                    max_steps=args.max_steps, feed=feed,
+                    executor=executor, route_checker=route_checker)
 
 
 if __name__ == "__main__":

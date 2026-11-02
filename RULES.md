@@ -322,3 +322,84 @@ on devnet except where this section says otherwise.
   one gate. Trading also requires: a loop start command, a real
   feed, a proven swap route, a validated signer, and James's
   go-ahead for that network. Any one missing = no trade.
+
+## 13. Price feed + swap executor (feed.py / swap.py — added 2026-11-01, code build only)
+
+- **Feed sources (verified live from the sandbox, 2026-11-01):**
+  DexScreener `/latest/dex/tokens/{mint}` for token pairs
+  (priceNative, priceUsd, liquidity, m5 buys/sells, priceChange),
+  CoinGecko simple price as the SOL-USD fallback, and
+  exchangerate-api for the CAD rate (fallback 0.712, approximate,
+  §7). DexScreener's SOL pair was verified at $95.52 USD and
+  CoinGecko at $95.49 USD; Jupiter v6 returned an empty reply
+  in this sandbox (reachability gap, NOT a verified route).
+- **30-second gain is computed, never read off a snapshot:**
+  DexScreener gives m5/h1/h24 changes, not 30-second changes.
+  feed.py's PriceTracker keeps timestamped sane marks per mint;
+  gain_30s = price_now / price_~30s_ago − 1, Analyst
+  confirmation = gained again in the last 5 seconds, Secondary
+  = still gaining (non-decreasing). A mint with less than 30
+  seconds of history is NOT a candidate — fail closed.
+- **Bad-tick rejection:** a single mark jumping more than
+  +500% in 30 seconds against the last sane mark is rejected,
+  the last sane mark is frozen, and the mint is flagged
+  stale_bad_tick. No candidate, buy, or sell is ever computed
+  from a rejected mark. A non-positive price is rejected the
+  same way.
+- **Freshness:** a price is usable only if present, positive,
+  and at most 30 seconds old (§5). Anything older or missing
+  blocks the trade; the feed reports age on every snapshot.
+- **Devnet feed limit (fail closed, §11):** DexScreener pairs
+  are MAINNET pairs. They must NEVER price a devnet swap. On
+  NETWORK=devnet the feed returns NO candidates and reports
+  `devnet_liquidity_unverified` unless a deployment explicitly
+  injects verified devnet pair data (a devnet test token with
+  a real devnet pool). Devnet trenches liquidity was NOT
+  verified in this sandbox.
+- **Discovery limit (honest):** no verified free public
+  endpoint in this sandbox reliably returns "all brand-new
+  Solana trenches coins sorted by 30-second gain". The feed
+  therefore tracks a caller-supplied watchlist (WATCH_MINTS,
+  comma-separated) plus the loop's open-position mints. A
+  deployment that wants autonomous discovery must supply a
+  discovery callable; the default returns NO mints, so with no
+  watchlist the feed produces NO candidates and trades nothing.
+- **Executor — quote-gated, signer-gated, never faked:**
+  swap.py requires, in order: (1) a validated signer
+  (engine.load_signer_with_status, §8); (2) a fresh route
+  quote (age at most 30 seconds, positive output, input/output
+  mints matching the requested direction — SOL -> token for
+  buys, token -> SOL for sells); (3) the slippage guard below.
+  Only then is a deployment-supplied tx_builder called. With
+  no tx_builder, every swap is refused
+  (`executor_not_configured`) — never faked. This build itself
+  performs NO signing and NO sending; signing/sending lives
+  only in a deployment-supplied tx_builder.
+- **Slippage guard — BUILDER DEFAULT, NOT James's number:**
+  1.0% (SLIPPAGE_GUARD_PCT = 0.01). A swap is refused if the
+  expected output at execution is more than 1.0% below the
+  quoted output. James has NOT set a slippage number for this
+  live engine; change this default only on his explicit
+  say-so, and never present it as his number.
+- **Route source status:** Jupiter v6 is the intended route
+  source, but it is UNVERIFIED in this sandbox (empty reply
+  for mainnet, no route for devnet). Orca/Raydium pools are
+  NOT queried directly by this build (no pool SDK, stdlib
+  only); a deployment wanting an Orca/Raydium route must
+  supply its own quoter callable, which this module validates
+  the same way (freshness, positive output, slippage guard).
+- **Smoke-test mode (read-only):** `python3 loop.py
+  --smoke-test --feed` reports feed status (SOL price source,
+  CAD source) plus the loop's route status, with NO swap, NO
+  signing, and NO trade. `swap.route_smoke_test(mint,
+  direction)` reports route availability for one mint/direction
+  the same way. A proven route here does NOT validate a
+  signer and does NOT start trading.
+- **Wiring:** loop.py now accepts a feed (LiveFeed instance
+  or callable) and an executor/route checker
+  (`--feed`, `--executor jupiter`, watchlist from WATCH_MINTS).
+  With no feed it still refuses with
+  `no_live_feed_configured`; with no tx_builder the swap
+  executor still refuses every swap. The Dockerfile CMD is
+  still the disabled guard — feed and executor change nothing
+  about the image's default behaviour.
