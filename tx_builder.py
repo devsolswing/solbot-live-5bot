@@ -84,22 +84,35 @@ Devnet route status (researched read-only, 2026-11-01)
   (That mint is named here as research evidence only — it is
   NOT a trading currency in this build, which is SOL-only.)
 * Solana devnet RPC getAccountInfo for the mainnet DEX program
-  addresses: Orca Whirlpool program -> value null (no account);
-  Raydium AMM program and Jupiter aggregator program -> accounts
-  that are NOT executable (executable=false, owner = System
-  Program, space 0) — i.e. those addresses are not programs on
-  devnet. Mainnet DEX programs cannot be used as a devnet route
-  at their mainnet addresses.
+  addresses (2026-11-01 check): Raydium AMM program and
+  Jupiter aggregator program -> accounts that are NOT
+  executable (executable=false, owner = System Program,
+  space 0) — i.e. those addresses are not programs on
+  devnet. Mainnet DEX programs cannot be used as a devnet
+  route at their mainnet addresses.
 * Orca pools API and Raydium pools API returned MAINNET pool
   data (chainId 101) — not devnet liquidity, and not usable
   for a devnet swap.
-CONCLUSION: NO devnet SOL swap route is verified by this build.
-A deployment proves one only by supplying verified devnet pool
-data (a devnet test token with a real devnet pool, via
-DevnetPoolQuoter / DEVNET_POOLS_JSON) or a devnet-deployed
-program's swap transaction — and the smoke test must show it
-before the first devnet trade. Until then, devnet swaps refuse
-with route_unverified, by design.
+CORRECTION (verified live on devnet RPC, 2026-11-02 — see
+orca_devnet.py, which supersedes the 2026-11-01 Orca claim
+above): the Orca Whirlpool program DOES exist on devnet as
+an executable program, its devnet config account exists,
+and a documented devnet test pool exists, is owned by that
+program, and is funded. A generic Whirlpool pool quoter now
+exists in orca_devnet.py (quote only — it reads a pool
+account and computes its spot price). That quoter is NOT
+wired into the trading route checker, because no Whirlpool
+swap-transaction provider has been built or tested on
+devnet yet. Quote data on devnet is therefore proven for
+a real pool; swap EXECUTION on devnet is not.
+CONCLUSION: NO devnet SOL swap route for TRADING is verified
+by this build. A deployment proves one only by supplying a
+tested Whirlpool (or Raydium) swap provider plus verified
+devnet pool data (a devnet test token with a real devnet
+pool, via DevnetPoolQuoter / DEVNET_POOLS_JSON) — and the
+smoke test must show it before the first devnet trade.
+Until then, devnet swaps refuse with route_unverified, by
+design.
 """
 
 from __future__ import annotations

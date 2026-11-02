@@ -603,3 +603,88 @@ on devnet except where this section says otherwise.
   only. No transaction was signed or sent in this build, on
   devnet or mainnet, and no key value was used, requested,
   or invented.
+
+## 16. Devnet route research, corrected 2026-11-02 (orca_devnet.py + verify_devnet_pool.py — research + code build only)
+
+- **CORRECTION — the 2026-11-01 claim that the Orca Whirlpool
+  program had no account on devnet is WRONG.** Verified live
+  on devnet RPC 2026-11-02 (getAccountInfo, public RPC):
+  Whirlpool program `whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc`
+  IS executable on devnet (owner BPFLoaderUpgrade, 2,141,440
+  lamports); devnet WhirlpoolsConfig
+  `FcrweFY1G9HJAHG5inkGB6pKg1HZ6x9UC2WioAfWrGkR` exists
+  and is owned by that program; a documented devnet test
+  pool `3KBZiL2g8C7tiJ32hTv5v3KM7aK9htpqTw4cTXz1HvPt`
+  exists, is owned by that program, and is funded (SOL
+  vault ~398 SOL, second vault ~6,354 units at the check;
+  both moved slightly on a re-check minutes later, so the
+  pool is live, not a stale account). Pool parse (verified
+  byte-for-byte): tickSpacing 64, tickSpacingSeed [64, 0],
+  feeRate 2000, protocolFeeRate 300, liquidity
+  76,581,459,811, sqrtPrice 0.14838, tickCurrent -38162,
+  spot ≈ 22.02 second-mint units per SOL.
+- **What this proves and what it does NOT prove.** It proves
+  Orca devnet infrastructure exists and that a Whirlpool
+  pool's spot price can be read from devnet RPC. It does
+  NOT prove a trading route, for three reasons: (1) the
+  documented test pool's second mint is a pegged test mint
+  — under the SOL-only rule it must NOT be wired as a
+  trading mint (proceeds park in SOL, never in a pegged
+  mint); (2) no Whirlpool swap-transaction provider has
+  been built or tested on devnet yet (tick arrays, oracle,
+  owner token accounts, sqrtPriceLimit, amount threshold
+  — all unbuilt); (3) the engine's trading route checker
+  is therefore UNCHANGED: devnet swaps still refuse with
+  `route_unverified`, by design.
+- **Jupiter on devnet: dead end, confirmed.** The Jupiter
+  aggregator program address returns NO account on devnet,
+  and Jupiter's quote/swap APIs are mainnet-focused. A
+  Jupiter quote, even if one were returned, references
+  mainnet program accounts that do not exist on devnet,
+  so a Jupiter-built swap cannot execute there. Do not
+  present Jupiter as a devnet route.
+- **Raydium devnet: programs exist, pools not verified.**
+  Devnet CPMM `CPMDWBwJDtYax9qW7AyRuVC19Cc4L4Vcy4n2BHAbHkCW`,
+  CLMM `devi51mZmdwUJGU9hjN27vEz64Gps7uUefqxg27EAtH`,
+  AMM v4 `DRaya7Kj3aMWQSy19kSjvmuwq9docCHofyP9kanQGaav`
+  are all executable on devnet, with their devnet config
+  accounts present (CPMM config
+  `9zSzfkYy6awexsHvmggeH36pfVUdDGyCcwmjT3AQPBj6`,
+  CLMM config `CQYbhr6amxUER4p5SC44C63R4qw4NFc9Z4Db9vF4tZwG`).
+  No Raydium devnet pool was verified here, and no
+  Raydium swap provider is built here. Raydium CPMM is
+  the most promising creation path for James (no OpenBook
+  market required, unlike AMM v4), followed by Orca
+  Whirlpool (permissionless pool creation via the
+  official SDK).
+- **Orca/Raydium pool-list APIs: mainnet only.** Both
+  returned chainId 101 data. They must NEVER price a
+  devnet swap. Only on-chain devnet RPC reads count.
+- **New code (not wired into trading):** `orca_devnet.py`
+  (Whirlpool parser in the verified layout, devnet RPC
+  reader, quote-only quoter with source
+  `orca_whirlpool_devnet_quote_only_no_execution`, and a
+  status report whose `execution_verified` is ALWAYS
+  False in this build) and `verify_devnet_pool.py`
+  (read-only CLI that prints a pool report, a
+  DEVNET_POOLS_JSON entry template, and a WATCH_MINTS
+  value). Tests: 175/175 (was 165/165, +10 Orca tests,
+  mocked RPC only). Dockerfile CMD unchanged (disabled
+  guard); `orca_devnet.py` is not imported by the loop,
+  so no trading path changed. No key was used, no
+  transaction signed or sent, nothing pushed or deployed
+  by this build.
+- **Exact next action for James (himself, throwaway
+  devnet wallet only — NEVER the trading wallet):** see
+  DEVNET_ROUTE_PLAN.md. In short: create a non-pegged
+  devnet test token, create a pool for it with devnet
+  SOL (Raydium CPMM or Orca Whirlpool via the official
+  SDK on his desktop, with faucet SOL), verify the pool
+  with `verify_devnet_pool.py`, then supply its verified
+  data via DEVNET_POOLS_JSON + WATCH_MINTS. Only after a
+  Whirlpool/Raydium swap provider is built and tested
+  against that real pool (with a throwaway wallet first)
+  can the deployment smoke test prove a devnet trading
+  route — and only then may `--tx-builder solana` be
+  added and `LIVE_ENABLED=1` be set, under the banked
+  devnet go-ahead.

@@ -333,3 +333,30 @@ for a key.
   construction from `TRADING_PRIVATE_KEY` / `TRADING_KEYPAIR`, and the
   live slow/fast market feed — all still unverified, as in the original
   build. None of these are proven by deploying the disabled image.
+
+### Devnet route research, corrected 2026-11-02 (orca_devnet.py)
+
+- The 2026-11-01 claim that Orca Whirlpool had no devnet
+  account is WRONG: the program is executable on devnet,
+  its devnet config exists, and a documented devnet test
+  pool exists and is funded (spot ≈ 22.02 second-mint
+  units per SOL at the check). See RULES.md §16 for the
+  full evidence (program, config, pool, vaults, tick).
+- That pool proves QUOTE data only, not trading: its
+  second mint is a pegged test mint (do NOT wire it as a
+  trading mint under the SOL-only rule), and no Whirlpool
+  swap-transaction provider has been built or tested on
+  devnet yet. Jupiter on devnet is a dead end (its
+  aggregator program has no devnet account). Raydium
+  devnet programs exist, but no Raydium devnet pool was
+  verified here.
+- New tools (local only, not pushed/deployed by that
+  build): `orca_devnet.py` (quote-only Whirlpool quoter)
+  and `verify_devnet_pool.py` (read-only pool verifier
+  that prints a DEVNET_POOLS_JSON entry template).
+  Neither is wired into the loop's trading path, and
+  devnet swaps still refuse with `route_unverified`.
+  The exact next action for James — create his own
+  non-pegged devnet test token + pool with a throwaway
+  devnet wallet, verify it, then inject it — is in
+  DEVNET_ROUTE_PLAN.md and RULES.md §16.
