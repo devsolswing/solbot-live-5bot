@@ -202,7 +202,10 @@ under the hard stop only, and log the missing input).
 
 ## 10. What this build does NOT do
 
-- No persistent loop is started by this build.
+- No persistent loop is started by the image by default. A loop
+  entrypoint now exists (`loop.py`, see §12), but the Dockerfile
+  CMD is still the disabled guard — the loop runs only when a
+  deployment explicitly sets its start command to it.
 - No transaction is sent, signed, or funded by this build, on devnet
   or mainnet.
 - No live swap execution is verified by this build on either network
@@ -265,3 +268,57 @@ on devnet except where this section says otherwise.
      Railway proving a SOL swap route before the first devnet trade.
   A devnet go-ahead does NOT authorise mainnet. Mainnet still needs
   its own funding confirmation, key check, and final go-ahead later.
+
+## 12. Trading loop (loop.py — added 2026-11-01, code build only)
+
+- **Entrypoint:** `loop.py` steps the §3 pipeline using engine.py
+  rules ONLY (no new sizing, stop, take-profit, halt, or key rule).
+  One step per 30 seconds (Screener cadence). Sells are evaluated
+  before buys. On halt, the loop sells everything (each attempt
+  retried once), parks in SOL, and STOPS — no new buys until James
+  explicitly restarts it.
+- **Gate order, before ANY trade step:** (1) `LIVE_ENABLED` must be
+  exactly `"1"` or refuse; (2) `NETWORK` must parse to devnet or
+  mainnet or refuse; (3) signer validated by
+  `engine.load_signer_with_status()` — exactly one of
+  `TRADING_PRIVATE_KEY` / `TRADING_KEYPAIR`, derived pubkey must
+  match wallet §1 or refuse; (4) halt check — a stale or missing
+  SOL price refuses (trading blocked), never "above halt";
+  (5) price-freshness check (>30s or missing = no trade);
+  (6) swap-route check (below). Every gate decision, buy/sell
+  intent, halt, and refusal is logged with fixed error codes and
+  public values only — no key material, ever.
+- **Market speed:** if a coin's market speed cannot be determined,
+  only hard-stop (−7%) and cap (+1000%) sells execute; slow-TP and
+  peak-drop sells are held (see §4).
+- **Swap execution — fail-closed abstraction:** swaps go through an
+  injected `SwapExecutor`. The default executor refuses every swap.
+  This build performs NO chain signing or sending itself and
+  invents NO price and NO route. A deployment must supply a real
+  executor on a proven route — it must never silently fall back
+  to faking one.
+- **Live feed — not in this build:** step inputs (candidates,
+  prices, SOL price, market speed) are supplied by the caller.
+  With no feed configured, `loop.py` refuses with
+  `no_live_feed_configured` and trades nothing. A deployment must
+  wire a real feed into `step_loop()` / `run_loop()` — never an
+  invented price.
+- **Smoke-test mode (read-only):** `python3 loop.py --smoke-test`
+  reports network, RPC, wallet, live-gate status, and route
+  status. It performs NO swap, NO signing, and NO trade, and does
+  NOT require `LIVE_ENABLED=1` or a signer. In this build it exits
+  non-zero with `route_unverified`, because devnet DEX routing
+  was NOT verified in the sandbox (Jupiter v6 devnet quote
+  returned no route) — that is the correct fail-closed result
+  until a deployment proves a route (Orca/Raydium devnet pool,
+  direct DEX instruction, or a devnet test token with a real pool).
+- **How the loop is started (separate deployment step, NOT done
+  by this build):** after the code is pushed, the service is
+  deployed, the key is set by James (§8), and a smoke test
+  proves a route + pubkey match, set the service's Custom Start
+  Command to `python3 loop.py` and `LIVE_ENABLED=1`. Until then,
+  the image's guard CMD runs and exits.
+- **LIVE_ENABLED=1 alone does NOT start trading.** It is only
+  one gate. Trading also requires: a loop start command, a real
+  feed, a proven swap route, a validated signer, and James's
+  go-ahead for that network. Any one missing = no trade.

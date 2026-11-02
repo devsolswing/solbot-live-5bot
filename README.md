@@ -24,6 +24,13 @@ remains in the live engine, dry run, or rules.
   key-shape validation (never logs key material). No network, no signing.
   SOL-only ledger; halt via a live SOL price (fail-closed on a stale
   or missing SOL price).
+- `loop.py` — trading loop entrypoint (added 2026-11-01, code build
+  only, NOT started by the image — see "Loop" below). Steps the §3
+  pipeline using engine.py rules only, with gates in order
+  (LIVE_ENABLED, NETWORK, signer, halt, price freshness, swap
+  route), sells before buys, halt sells-all + stop, and a
+  read-only `--smoke-test` mode. Default swap executor and route
+  checker refuse every trade (no proven route in this build).
 - `dry_run.py` — read-only public checks: wallet SOL balance, SOL price,
   CAD/USD rate, and halt arithmetic in SOL. No signing, no sending,
   no funding.
@@ -36,6 +43,40 @@ remains in the live engine, dry run, or rules.
 cd ~/workspace/solbot-live-5bot
 python3 -m unittest discover -s tests -v
 ```
+
+## Loop (code build only — NOT started by the image)
+
+```sh
+python3 loop.py --smoke-test   # read-only: no swap, no signing, no trade
+python3 loop.py                # refuses without a feed (see below)
+```
+
+`loop.py` is the missing loop, built 2026-11-01 as code only. It
+does NOT run automatically: the Dockerfile CMD is still the disabled
+guard, and setting `LIVE_ENABLED=1` alone does NOT start trading.
+
+Gate order before any trade step: (1) `LIVE_ENABLED` exactly `"1"`,
+(2) `NETWORK` parses to devnet/mainnet, (3) signer validated by
+engine (exactly one key variable, derived pubkey must match
+`9g9R…UTFQ`), (4) halt check (stale/missing SOL price = trading
+blocked), (5) price freshness (>30s = no trade), (6) swap-route
+check. Sells first, then buys at exactly 20% per coin, max 5 open,
+one per coin, proceeds park in SOL. On halt it sells all, parks in
+SOL, and stops — no new buys until James restarts it.
+
+What the loop does NOT supply in this build: a live price feed and
+a real swap executor. Step inputs are caller-supplied; with no feed,
+`loop.py` refuses with `no_live_feed_configured` and trades
+nothing. The default swap executor and route checker refuse every
+trade, because devnet DEX routing was NOT verified in the sandbox
+(Jupiter v6 devnet quote returned no route). A deployment must
+wire a real feed and a proven-route executor into `step_loop()` /
+`run_loop()` — never an invented price or a faked swap.
+
+How it is started later (separate deployment step, NOT done here):
+after push, Railway deploy, key set by James, and a smoke test
+proving a route + pubkey match, set the Railway service's Custom
+Start Command to `python3 loop.py` and `LIVE_ENABLED=1`.
 
 ## Dry run (read-only)
 
@@ -95,8 +136,9 @@ own separate go-ahead later.
    this sandbox build explicitly does NOT verify).
 
 Until all gates for a network are done, `LIVE_ENABLED` defaults to off
-and the engine refuses to trade. Do not start a persistent loop from
-this build.
+and the engine refuses to trade. `LIVE_ENABLED=1` alone does NOT
+start trading — the loop also needs a start command, a real feed,
+and a proven swap route (see "Loop" above and RULES.md §12).
 
 ## Railway deployment (prepared, NOT deployed by this build)
 
@@ -112,9 +154,12 @@ for a key.
   to build if any test fails. Runtime: `LIVE_ENABLED=0` is set in the
   image, no `TRADING_*` variable is set in the image, and the container
   runs a disabled-mode guard (live gate off, no signer) and exits
-  cleanly. **This image does NOT start a trading loop** — no loop
-  exists in this build — and it sends no transaction. Deploying it now
-  only hosts the disabled code.
+  cleanly. **This image does NOT start the trading loop by
+  default** — `loop.py` now exists in the image, but the CMD is
+  still the disabled guard; the loop runs only when a deployment
+  explicitly sets its start command to `python3 loop.py` (see
+  "Loop" above). Deploying it now only hosts the disabled code
+  and sends no transaction.
 - `.dockerignore` — excludes git metadata, caches, `.env` files, any
   keypair/secret files, and state files, so none of those can be baked
   into the image by accident.
